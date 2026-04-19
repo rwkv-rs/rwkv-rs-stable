@@ -1,0 +1,27 @@
+name: Stale Pull Requests
+
+on:
+  schedule:
+    - cron: "0 12 * * *"
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Stale pull requests
+        uses: actions/stale@v10
+        with:
+          days-before-issue-stale: -1
+          days-before-pr-stale: 30
+          days-before-pr-close: -1
+          stale-pr-label: stale
+          stale-pr-message: This PR has been marked as stale because it has not been updated for over a month.
+          remove-pr-stale-when-updated: true

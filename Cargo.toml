@@ -2,7 +2,8 @@
 resolver = "2"
 members = [
     "./crates/*",
-#    "./examples/*"
+    "./xtask",
+    #    "./examples/*"
 ]
 
 [workspace.package]
@@ -14,6 +15,14 @@ version = "0.1.0"
 [workspace.lints.clippy]
 
 [workspace.dependencies]
+# === CLI & GUI ===
+clap = { version = "4.6.1", default-features = false, features = ["color", "derive", "error-context", "help", "std", "suggestions", "usage"] }
+
+# === Unitest & Bench ===
+# === Log & Trace ===
+# === Exception Handling ===
+anyhow = { version = "1.0.102", default-features = false, features = ["std"] }  # for xtask
+
 # === Deep Learning Core ===
 burn = { version = "0.21.0-pre.3", default-features = false }
 burn-train = { version = "0.21.0-pre.3", default-features = false }
@@ -23,6 +32,19 @@ burn-ir = { version = "0.21.0-pre.3", default-features = false }
 burn-store = { version = "0.21.0-pre.3", default-features = false }
 burn-optim = { version = "0.21.0-pre.3", default-features = false }
 burn-ndarray = { version = "0.21.0-pre.3", default-features = false }
+
+# === Performance ===
+# === Frame ===
+# === Data Structures ===
+# === File ===
+# === Serialization ===
+serde = { version = "1.0.228", default-features = false, features = ["derive", "std"] }
+sonic-rs = { version = "0.5.8", default-features = false } # instead of serde_json!!!
+
+# === CI/CD ===
+xshell = { version = "0.3.0-pre.2", default-features = false }
+
+# === Database ===
 
 
 [profile.release]

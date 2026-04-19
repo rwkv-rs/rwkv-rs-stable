@@ -1,0 +1,93 @@
+name: Vulnerabilities
+
+on:
+  schedule:
+    - cron: "0 21 * * WED"
+  push:
+    tags:
+      - "v*.*.*"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cargo-careful:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install nightly Rust
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly
+          components: rust-src
+
+      - name: Install cargo-careful
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-careful
+
+      - name: Cargo careful
+        run: cargo xtask vulnerabilities cargo-careful
+
+  address-sanitizer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install nightly Rust
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly
+          components: rust-src
+
+      - name: AddressSanitizer
+        run: cargo xtask vulnerabilities address-sanitizer
+
+  thread-sanitizer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install nightly Rust
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly
+          components: rust-src
+
+      - name: ThreadSanitizer
+        run: cargo xtask vulnerabilities thread-sanitizer
+
+  memory-sanitizer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install nightly Rust
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly
+          components: rust-src
+
+      - name: MemorySanitizer
+        run: cargo xtask vulnerabilities memory-sanitizer
+
+  safe-stack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install nightly Rust
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly
+          components: rust-src
+
+      - name: SafeStack
+        run: cargo xtask vulnerabilities safe-stack

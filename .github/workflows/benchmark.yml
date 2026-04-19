@@ -1,0 +1,54 @@
+name: Benchmark
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmarks:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-benchmarks')
+    runs-on: [self-hosted, linux, x64, gpu, szx-pro6000x4, benchmark]
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Run benchmarks
+        run: cargo xtask bench --ci --output target/benchmark/bencher.txt
+
+      - name: Check benchmark output
+        id: bench-output
+        shell: bash
+        run: |
+          if [ -s target/benchmark/bencher.txt ]; then
+            echo "has_output=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_output=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload benchmark history
+        if: steps.bench-output.outputs.has_output == 'true'
+        uses: rhysd/github-action-benchmark@v1
+        with:
+          tool: cargo
+          output-file-path: target/benchmark/bencher.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch }}
+          comment-on-alert: true
+          alert-threshold: "150%"
+          fail-on-alert: false
+
+      - name: No benchmark targets
+        if: steps.bench-output.outputs.has_output != 'true'
+        run: echo "No bench targets discovered; reserved benchmark workflow completed without upload."

@@ -1,0 +1,76 @@
+name: CI GPU
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request number associated with this manual run"
+        type: number
+        required: false
+
+run-name: ${{ github.workflow }}:${{ github.repository }}#${{ inputs.pr_number }}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-std-cuda-tests:
+    runs-on: [self-hosted, linux, x64, gpu, szx-pro6000x4, cuda]
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Tests (cuda)
+        run: cargo xtask test --release --ci gcp-cuda-runner
+
+  linux-std-vulkan-tests:
+    runs-on: [self-hosted, linux, x64, gpu, szx-pro6000x4, vulkan]
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Tests (vulkan)
+        run: cargo xtask test --release --ci gcp-vulkan-runner
+
+  linux-std-wgpu-tests:
+    runs-on: [self-hosted, linux, x64, gpu, szx-pro6000x4, wgpu]
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Tests (wgpu)
+        run: cargo xtask test --release --ci gcp-wgpu-runner
