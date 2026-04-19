@@ -2,15 +2,15 @@ use anyhow::Result;
 use clap::Args;
 
 use crate::{
+    Context,
     commands::{
+        WorkspaceArgs,
         books::{self, BookKind, BookKindArgs, BookSubcommand, BooksArgs},
         build::{self, BuildArgs},
         check::{self, CheckArgs, CheckSubcommand},
         doc::{self, DocArgs, DocSubcommand},
         test::{self, CiTestType, TestArgs},
-        WorkspaceArgs,
     },
-    Context,
 };
 
 #[derive(Args, Clone, Debug, Default)]

@@ -1,0 +1,21 @@
+[package]
+name = "rwkv-nn"
+authors = ["caizus <18930215187@163.com>"]
+categories = ["science", "algorithms"]
+keywords = ["rwkv", "llm", "inference", "deep-learning", "burn"]
+
+description = "practical and extensible RWKV toolkit in Rust"
+documentation = "https://docs.rs/rwkv"
+repository = "https://github.com/rwkv-rs/rwkv-rs"
+
+rust-version = "1.95"
+
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+version.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

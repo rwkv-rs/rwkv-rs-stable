@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Args, ValueEnum};
 
-use crate::{commands, Context};
+use crate::{Context, commands};
 
 #[derive(Args, Clone, Debug, Default)]
 pub struct TestArgs {

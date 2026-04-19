@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
 
-use crate::{commands, Context};
+use crate::{Context, commands};
 
 #[derive(Args, Clone, Debug)]
 pub struct DocArgs {

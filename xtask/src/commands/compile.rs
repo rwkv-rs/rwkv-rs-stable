@@ -2,8 +2,8 @@ use anyhow::Result;
 use clap::Args;
 
 use crate::{
-    commands::build::{self, BuildArgs},
     Context,
+    commands::build::{self, BuildArgs},
 };
 
 #[derive(Args, Clone, Debug, Default)]

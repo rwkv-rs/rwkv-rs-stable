@@ -2,8 +2,8 @@
 resolver = "2"
 members = [
     "./crates/*",
+    # "./examples/*"
     "./xtask",
-    #    "./examples/*"
 ]
 
 [workspace.package]
