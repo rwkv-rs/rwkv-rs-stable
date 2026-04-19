@@ -1,8 +1,0 @@
-[package]
-name = "rwkv-prompt"
-version = "0.1.0"
-edition = "2024"
-description = "Placeholder crate for RWKV prompt templates, routing rules, and conversation state"
-license = "Apache-2.0"
-
-[dependencies]

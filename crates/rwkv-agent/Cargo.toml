@@ -1,8 +1,0 @@
-[package]
-name = "rwkv-agent"
-version = "0.1.0"
-edition = "2024"
-description = "Scaffolding for the forthcoming RWKV agent runtime bridging inference, tools, and memory"
-license = "Apache-2.0"
-
-[dependencies]
