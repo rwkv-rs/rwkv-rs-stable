@@ -1,14 +1,11 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+#![warn(missing_docs)]
+#![warn(rustdoc::broken_intra_doc_links)]
+#![warn(rustdoc::invalid_html_tags)]
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+// pub mod cells;
+// pub mod functions;
+pub mod kernels;
+// pub mod layers;
+// pub mod modules;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub mod test_utils;

@@ -15,7 +15,38 @@ license.workspace = true
 readme.workspace = true
 version.workspace = true
 
+[features]
+default = ["nn"]
+store = ["dep:burn-store"]
+
+#data = ["dep:rwkv-data"]
+nn = ["dep:rwkv-nn"]
+#train = ["dep:rwkv-train"]
+#infer = ["dep:rwkv-infer"]
+#eval = ["dep:rwkv-eval"]
+
+#train-tui = ["train", "rwkv-train/tui"]
+#train-metrics = ["train", "rwkv-train/metrics"]
+#train-collective = ["train", "rwkv-train/collective"]
+
+#infer-http = ["infer", "rwkv-infer/http"]
+#infer-ipc = ["infer", "rwkv-infer/ipc"]
+
+#eval-sandbox = ["eval", "rwkv-eval/sandbox"]
+
 [dependencies]
+burn = { workspace = true, default-features = false, features = ["std"] }
+burn-store = { workspace = true, default-features = false, optional = true }
+
+#rwkv-config = { path = "../rwkv-config" }
+#rwkv-data = { path = "../rwkv-data", optional = true }
+rwkv-nn = { path = "../rwkv-nn", default-features = false, optional = true }
+#rwkv-train = { path = "../rwkv-train", default-features = false, optional = true }
+#rwkv-infer = { path = "../rwkv-infer", default-features = false, optional = true }
+#rwkv-eval = { path = "../rwkv-eval", default-features = false, optional = true }
+#rwkv-test = { path = "../rwkv-test", default-features = false, optional = true }
+#rwkv-bench = { path = "../rwkv-bench", default-features = false, optional = true }
+
 
 [lints]
 workspace = true

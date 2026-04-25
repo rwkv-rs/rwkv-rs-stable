@@ -14,13 +14,21 @@ version = "0.1.0"
 
 [workspace.lints.clippy]
 
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+invalid_html_tags = "deny"
+
 [workspace.dependencies]
 # === CLI & GUI ===
 clap = { version = "4.6.1", default-features = false, features = ["color", "derive", "error-context", "help", "std", "suggestions", "usage"] }
 
 # === Unitest & Bench ===
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+
 # === Log & Trace ===
+tracing = { version = "0.1.44", default-features = false, features = ["attributes", "std"] }
 # === Exception Handling ===
+thiserror = { version = "2.0.18", default-features = false }
 anyhow = { version = "1.0.102", default-features = false, features = ["std"] }  # for xtask
 
 # === Deep Learning Core ===

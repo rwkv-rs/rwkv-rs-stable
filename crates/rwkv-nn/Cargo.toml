@@ -15,7 +15,61 @@ license.workspace = true
 readme.workspace = true
 version.workspace = true
 
+[lib]
+bench = false
+
+[[bench]]
+name = "addcmul_forward"
+harness = false
+path = "benches/kernels/addcmul/forward.rs"
+
+[[bench]]
+name = "addcmul_backward"
+harness = false
+path = "benches/kernels/addcmul/backward.rs"
+
+[features]
+default = []
+trace = ["dep:tracing"]
+fusion = ["dep:burn-fusion", "burn-cubecl/fusion"]
+cpu = []
+wgpu = ["burn/wgpu"]
+webgpu = ["wgpu", "burn/webgpu"]
+vulkan = ["wgpu", "burn/vulkan"]
+metal = ["wgpu", "burn/metal"]
+cuda = ["burn/cuda"]
+rocm = ["burn/rocm"]
+
 [dependencies]
+# === Log & Trace ===
+tracing = { workspace = true, optional = true }
+
+# === Exception Handling ===
+thiserror = { workspace = true }
+
+# === Deep Learning Core ===
+burn = { workspace = true, default-features = false, features = ["std", "autodiff", "cubecl", "cpu"] }
+burn-fusion = { workspace = true, default-features = false, features = ["std"], optional = true }
+burn-cubecl = { workspace = true, default-features = false, features = ["std"] }
+burn-ir = { workspace = true, default-features = false, features = ["std"] }
+
+# === Performance ===
+
+# === Frame ===
+
+# === Data Structures ===
+
+# === File ===
+
+# === Serialization ===
+serde = { workspace = true, default-features = false }
+
+# === Local Dependencies ===
+#rwkv-config = { path = "../rwkv-config" }
+#rwkv-data = { path = "../rwkv-data" }
+
+[dev-dependencies]
+criterion = { workspace = true }
 
 [lints]
 workspace = true

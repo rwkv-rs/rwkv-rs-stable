@@ -19,8 +19,9 @@
 涉及测试或基准应放在哪个路径, 如何从源码反查测试/基准时, 以 `note_for_agents/testing_layout.md` 为准.
 
 ## 测试约定
-- 正确性测试统一放在镜像 `src/` 的 `tests/` 目录树中.
-- 不再新增实现文件内 `#[cfg(test)]` 模块或同目录 `tests.rs`.
+- 单元测试跟随被测函数所在文件, 写在对应源码文件的 `#[cfg(test)] mod tests` 中.
+- `src/test_utils/**` 用于测试工具和共用逻辑.
+- 集成, 端到端或跨 crate 边界的测试可放在 `tests/**`.
 - 涉及异步逻辑时使用 `#[tokio::test]`.
 - `rwkv-eval` 的 benchmark 数据集测试位于 `crates/rwkv-eval/tests/cores/datasets/**`, 默认被忽略, 需使用 `cargo nextest -p rwkv-eval --test benchmark_datasets --run-ignored only ...` 执行.
 - `examples/rwkv-lm-eval/scripts/unit_test.sh` 展示了一个需要 `HF_TOKEN` 的测试入口.
@@ -29,8 +30,8 @@
 ## 性能相关改动
 涉及性能优化时, 不要只给出主观判断. 应结合基准测试或关键指标, 明确变更前后差异与瓶颈位置.
 
-若修改命中了 `rwkv-nn` kernel, `rwkv-lm` 推理路径或其他热点代码, 应优先复用镜像 `src/` 的 `benches/` 基准路径; 若无现成 bench, 需要按镜像规则补充新的基准文件. 需要长期对比的微基准优先走 Criterion 与 `github-action-benchmark` 的标准接入方式, 不再在源码树中单独维护 benchmark 摘要目录.
+若修改命中了 `rwkv-nn` kernel, `rwkv-lm` 推理路径或其他热点代码, 应优先复用与源码结构对应的 `benches/` 基准路径; 若无现成 bench, 需要按 `note_for_agents/testing_layout.md` 补充新的基准文件. 需要长期对比的微基准使用 Criterion 与 `github-action-benchmark` 的标准接入方式.
 
-当前 CI benchmark 历史只追踪 `rwkv-nn` 的 Criterion 微基准. 为避免默认占用 `self-hosted` runner, benchmark workflow 不再随 `push` 或普通 PR 自动运行; PR 需要显式打上 `run-benchmarks` label 才会执行一次对比, 手动触发 workflow 且目标为默认分支时才会更新历史曲线. 该 workflow 固定运行在带 GPU 的 `szx-pro6000x4` runner 上, 不应调度到无 GPU 的云主机. `examples/rwkv-lm/benches/inferring.rs` 仍是带外部模型配置的手动压测入口, 不纳入该历史曲线.
+CI benchmark 历史追踪 `rwkv-nn` 的 Criterion 微基准. benchmark workflow 在带有 `run-benchmarks` label 的 PR 上执行对比; 手动触发 workflow 且目标为默认分支时更新历史曲线. 该 workflow 固定运行在带 GPU 的 `szx-pro6000x4` runner 上, 不应调度到无 GPU 的云主机. `examples/rwkv-lm/benches/inferring.rs` 是带外部模型配置的手动压测入口, 不纳入该历史曲线.
 
 涉及源码注释, 术语或异常策略变更时, 同时遵循 `note_for_agents/documentation_workflow.md`.

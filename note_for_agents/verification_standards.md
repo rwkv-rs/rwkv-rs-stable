@@ -5,7 +5,7 @@
   - `cargo doc --workspace --no-deps`
   - `mdbook build rwkv-rs-book`
 - 任何代码改动仍需执行与范围匹配的 `cargo check`, `cargo test` 或 `cargo nextest`.
-- 测试与基准的放置路径必须符合 `note_for_agents/testing_layout.md`, 不再接受 `src/**` 内联测试.
+- 测试与基准的放置路径和命名必须符合 `note_for_agents/testing_layout.md`; 单元测试应跟随被测函数写在对应源码文件中.
 - 全仓 crate / example 根默认用 `#![warn(missing_docs)]` 与 rustdoc `warn` 暴露文档债务.
 
 ## 风险分级
