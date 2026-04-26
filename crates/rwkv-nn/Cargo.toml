@@ -28,9 +28,21 @@ name = "addcmul_backward"
 harness = false
 path = "benches/kernels/addcmul/backward.rs"
 
+[[bench]]
+name = "token_shift_diff_forward"
+harness = false
+path = "benches/kernels/token_shift_diff/forward.rs"
+
+[[bench]]
+name = "token_shift_diff_backward"
+harness = false
+path = "benches/kernels/token_shift_diff/backward.rs"
+
 [features]
 default = []
 trace = ["dep:tracing"]
+autotune = ["burn-cubecl/autotune"]
+autotune-checks = ["autotune", "burn-cubecl/autotune-checks"]
 fusion = ["dep:burn-fusion", "burn-cubecl/fusion"]
 cpu = []
 wgpu = ["burn/wgpu"]

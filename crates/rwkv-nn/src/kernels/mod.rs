@@ -1,14 +1,20 @@
-use crate::kernels::{addcmul::AddcmulBackend, template::TemplateBackend};
+use crate::kernels::{
+    addcmul::AddcmulBackend,
+    template::TemplateBackend,
+    token_shift_diff::TokenShiftDiffBackend,
+};
 
 /// Fused elementwise add-and-multiply kernels.
 pub mod addcmul;
 /// Shared input contract checks for fused kernels.
 pub mod check;
 pub mod template;
+/// Fused token-shift difference and state update kernels.
+pub mod token_shift_diff;
+
 // pub mod guided_token_mask;
 // pub mod l2wrap;
 // pub mod rapid_sample;
-// pub mod token_shift_diff;
 // pub mod wkv7_common;
 // pub mod wkv7_infer;
 // pub mod wkv7_pretrain;
@@ -16,9 +22,15 @@ pub mod template;
 // pub mod wkv7_statetune;
 
 /// We create our own Backend trait that extends the Burn backend trait.
-pub trait Backend: burn::tensor::backend::Backend + TemplateBackend + AddcmulBackend {}
+pub trait Backend:
+    burn::tensor::backend::Backend + TemplateBackend + AddcmulBackend + TokenShiftDiffBackend
+{
+}
 
-impl<B> Backend for B where B: burn::tensor::backend::Backend + TemplateBackend + AddcmulBackend {}
+impl<B> Backend for B where
+    B: burn::tensor::backend::Backend + TemplateBackend + AddcmulBackend + TokenShiftDiffBackend
+{
+}
 
 /// We create our own AutodiffBackend trait that extends the Burn autodiff backend trait.
 pub trait AutodiffBackend: Backend + burn::tensor::backend::AutodiffBackend {}
