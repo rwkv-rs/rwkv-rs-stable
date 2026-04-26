@@ -1,13 +1,13 @@
-use burn::tensor::{ops::FloatTensor, Tensor};
+use burn::tensor::{Tensor, ops::FloatTensor};
 
 use crate::kernels::{
     check::{
+        KernelInputsError,
         check_axes_equal,
         check_same_device,
         check_same_dtype,
         check_shape,
         get_tensor_info,
-        KernelInputsError,
     },
     template::TemplateBackend as Backend,
 };

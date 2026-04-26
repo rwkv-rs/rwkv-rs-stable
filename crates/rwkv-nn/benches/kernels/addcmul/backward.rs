@@ -2,13 +2,13 @@
 
 use std::hint::black_box;
 
-use burn::{backend::Autodiff, prelude::Backend, tensor::Distribution, Tensor};
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use burn::{Tensor, backend::Autodiff, prelude::Backend, tensor::Distribution};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use rwkv_nn::kernels::addcmul::{
-    addcmul5_custom,
-    addcmul5_reference,
     addcmul_custom,
     addcmul_reference,
+    addcmul5_custom,
+    addcmul5_reference,
     io::{Addcmul5ForwardInputs, AddcmulForwardInputs},
 };
 

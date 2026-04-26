@@ -1,21 +1,27 @@
 use burn::{
     backend::autodiff::{
+        Autodiff,
+        NodeId,
         checkpoint::{base::Checkpointer, strategy::CheckpointStrategy},
         grads::Gradients,
         ops::{Backward, Ops, OpsKind},
-        Autodiff,
-        NodeId,
     },
     tensor::ops::FloatTensor,
 };
 use burn_cubecl::{
+    CubeBackend,
+    CubeElement,
+    CubeRuntime,
+    CubeTuneId,
+    FloatElement,
+    IntElement,
     cubecl::{
+        CubeCount,
+        CubeDim,
         calculate_cube_count_elemwise,
         prelude::*,
         tensor_vector_size_parallel,
         tune::{
-            anchor,
-            local_tuner,
             AsFunctionTunable,
             AutotuneKey,
             AutotuneOutput,
@@ -23,23 +29,18 @@ use burn_cubecl::{
             Tunable,
             TunableSet,
             TuneGroup,
+            anchor,
+            local_tuner,
         },
-        CubeCount,
-        CubeDim,
     },
     element::BoolElement,
     ops::numeric::{empty_device, zeros_client},
     tensor::CubeTensor,
-    CubeBackend,
-    CubeElement,
-    CubeRuntime,
-    CubeTuneId,
-    FloatElement,
-    IntElement,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::kernels::addcmul::{
+    AddcmulBackend,
     io::{
         Addcmul5ForwardPrimitiveInputs,
         Addcmul5ForwardPrimitiveOutput,
@@ -51,7 +52,6 @@ use crate::kernels::addcmul::{
         addcmul_scale_reduce_finalize_kernel,
         addcmul_scale_reduce_partial_kernel,
     },
-    AddcmulBackend,
 };
 
 impl<R, F, I, BT, C> AddcmulBackend for Autodiff<CubeBackend<R, F, I, BT>, C>
@@ -714,16 +714,22 @@ where
     I: IntElement,
     BT: BoolElement,
 {
+    #[cfg(feature = "autotune-checks")]
+    fn check_equivalence(&self, other: Self) {
+        AutotuneOutput::check_equivalence(&self.base_grad, other.base_grad);
+        AutotuneOutput::check_equivalence(&self.diff_grad, other.diff_grad);
+        AutotuneOutput::check_equivalence(&self.scale_grad, other.scale_grad);
+    }
 }
 
 #[cfg(feature = "fusion")]
 mod fusion_impl {
     use burn::tensor::Shape;
     use burn_fusion::{
-        stream::{Operation, OperationStreams},
         Fusion,
         FusionBackend,
         FusionRuntime,
+        stream::{Operation, OperationStreams},
     };
     use burn_ir::{CustomOpIr, HandleContainer, OperationIr, TensorIr};
 

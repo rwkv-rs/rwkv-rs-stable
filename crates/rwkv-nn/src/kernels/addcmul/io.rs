@@ -1,15 +1,15 @@
-use burn::tensor::{ops::FloatTensor, Tensor};
+use burn::tensor::{Tensor, ops::FloatTensor};
 
 use crate::kernels::{
     addcmul::AddcmulBackend as Backend,
     check::{
+        KernelInputsError,
         check_axis_non_empty,
         check_same_device,
         check_same_dtype,
         check_same_shape,
         check_shape,
         get_tensor_info,
-        KernelInputsError,
     },
 };
 

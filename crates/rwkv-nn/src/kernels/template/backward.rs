@@ -1,15 +1,15 @@
 use burn::{
     backend::autodiff::{
-        checkpoint::{base::Checkpointer, strategy::CheckpointStrategy},
-        grads::Gradients,
-        ops::{broadcast_shape, Backward, Ops, OpsKind},
         Autodiff,
         NodeId,
+        checkpoint::{base::Checkpointer, strategy::CheckpointStrategy},
+        grads::Gradients,
+        ops::{Backward, Ops, OpsKind, broadcast_shape},
     },
-    tensor::{ops::FloatTensor, Shape, TensorMetadata},
+    tensor::{Shape, TensorMetadata, ops::FloatTensor},
 };
 
-use crate::kernels::template::{io::MatmulAddReluPrimitiveInputs, TemplateBackend};
+use crate::kernels::template::{TemplateBackend, io::MatmulAddReluPrimitiveInputs};
 
 // Implement our custom backend trait for any backend that also implements our custom backend trait.
 impl<B, C> TemplateBackend for Autodiff<B, C>

@@ -2,6 +2,7 @@ use burn::cubecl;
 use cubecl::{cube, prelude::*};
 
 /// Declare a custom kernel that gets compiled to `wgpu`/`CUDA`
+/// Please name this function "fused_{kernel_name}_kernel" when you reuse this template.
 #[cube(launch)]
 pub fn fused_matmul_add_relu_kernel<F: Float>(
     lhs: &Tensor<F>,

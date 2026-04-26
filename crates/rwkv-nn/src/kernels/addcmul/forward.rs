@@ -1,12 +1,16 @@
-use burn::tensor::{ops::FloatTensor, DType};
+use burn::tensor::{DType, ops::FloatTensor};
 use burn_cubecl::{
+    CubeBackend,
+    CubeElement,
+    CubeRuntime,
+    CubeTuneId,
+    FloatElement,
+    IntElement,
     cubecl::{
         calculate_cube_count_elemwise,
         prelude::*,
         tensor_vector_size_parallel,
         tune::{
-            anchor,
-            local_tuner,
             AsFunctionTunable,
             AutotuneKey,
             AutotuneOutput,
@@ -14,17 +18,13 @@ use burn_cubecl::{
             Tunable,
             TunableSet,
             TuneGroup,
+            anchor,
+            local_tuner,
         },
     },
     element::BoolElement,
     ops::numeric::empty_device,
     tensor::CubeTensor,
-    CubeBackend,
-    CubeElement,
-    CubeRuntime,
-    CubeTuneId,
-    FloatElement,
-    IntElement,
 };
 use serde::{Deserialize, Serialize};
 
@@ -35,10 +35,10 @@ use crate::kernels::addcmul::{
         AddcmulForwardPrimitiveInputs,
     },
     kernel::{
-        addcmul5_forward_kernel,
-        addcmul_forward_kernel,
         Addcmul5ForwardInputsLaunch,
         Addcmul5ForwardOutputsLaunch,
+        addcmul_forward_kernel,
+        addcmul5_forward_kernel,
     },
 };
 
@@ -84,6 +84,14 @@ where
     I: IntElement,
     BT: BoolElement,
 {
+    #[cfg(feature = "autotune-checks")]
+    fn check_equivalence(&self, other: Self) {
+        AutotuneOutput::check_equivalence(&self.receptance_input, other.receptance_input);
+        AutotuneOutput::check_equivalence(&self.weight_decay_input, other.weight_decay_input);
+        AutotuneOutput::check_equivalence(&self.key_input, other.key_input);
+        AutotuneOutput::check_equivalence(&self.value_input, other.value_input);
+        AutotuneOutput::check_equivalence(&self.learning_rate_input, other.learning_rate_input);
+    }
 }
 
 pub(crate) fn fused_addcmul<
@@ -287,10 +295,10 @@ pub(crate) fn fused_addcmul5<
 mod fusion_impl {
     use burn::tensor::{Element, Shape};
     use burn_fusion::{
-        stream::{Operation, OperationStreams},
         Fusion,
         FusionBackend,
         FusionRuntime,
+        stream::{Operation, OperationStreams},
     };
     use burn_ir::{CustomOpIr, HandleContainer, OperationIr, TensorIr};
 
@@ -385,8 +393,22 @@ mod fusion_impl {
                     >,
                 ) {
                     let (
-                        [base, diff, receptance_scale, weight_decay_scale, key_scale, value_scale, learning_rate_scale],
-                        [receptance_output_out, weight_decay_output_out, key_output_out, value_output_out, learning_rate_output_out],
+                        [
+                            base,
+                            diff,
+                            receptance_scale,
+                            weight_decay_scale,
+                            key_scale,
+                            value_scale,
+                            learning_rate_scale,
+                        ],
+                        [
+                            receptance_output_out,
+                            weight_decay_output_out,
+                            key_output_out,
+                            value_output_out,
+                            learning_rate_output_out,
+                        ],
                     ) = self.desc.as_fixed();
 
                     let output = B1::fused_addcmul5(Addcmul5ForwardPrimitiveInputs {

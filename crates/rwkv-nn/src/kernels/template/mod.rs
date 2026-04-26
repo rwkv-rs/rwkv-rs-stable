@@ -3,7 +3,7 @@ mod forward;
 pub mod io;
 mod kernel;
 
-use burn::tensor::{activation, ops::FloatTensor, Tensor, TensorPrimitive};
+use burn::tensor::{Tensor, TensorPrimitive, activation, ops::FloatTensor};
 
 use crate::kernels::template::io::{MatmulAddReluInputs, MatmulAddReluPrimitiveInputs};
 

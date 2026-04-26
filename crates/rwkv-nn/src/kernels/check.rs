@@ -1,4 +1,4 @@
-use burn::tensor::{backend::Backend, BasicOps, DType, Shape, Tensor};
+use burn::tensor::{BasicOps, DType, Shape, Tensor, backend::Backend};
 use thiserror::Error;
 
 #[derive(Clone, Debug)]

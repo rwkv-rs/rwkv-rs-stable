@@ -4,17 +4,18 @@ pub(crate) mod forward;
 pub mod io;
 mod kernel;
 
-use burn::tensor::{ops::FloatTensor, Tensor, TensorPrimitive};
+use burn::tensor::{Tensor, TensorPrimitive, ops::FloatTensor};
 use burn_cubecl::{
-    element::BoolElement,
     CubeBackend,
     CubeElement,
     CubeRuntime,
     FloatElement,
     IntElement,
+    element::BoolElement,
 };
 
 use crate::kernels::{
+    Backend,
     addcmul::io::{
         Addcmul5ForwardInputs,
         Addcmul5ForwardOutput,
@@ -23,7 +24,6 @@ use crate::kernels::{
         AddcmulForwardInputs,
         AddcmulForwardPrimitiveInputs,
     },
-    Backend,
 };
 
 /// We create our own Backend trait that extends the Burn backend trait.
@@ -174,10 +174,10 @@ mod tests {
 
     use crate::{
         kernels::addcmul::{
-            addcmul5_custom,
-            addcmul5_reference,
             addcmul_custom,
             addcmul_reference,
+            addcmul5_custom,
+            addcmul5_reference,
             io::{Addcmul5ForwardInputs, AddcmulForwardInputs},
         },
         test_utils::backend::{TestAutodiffBackend, TestBackend},

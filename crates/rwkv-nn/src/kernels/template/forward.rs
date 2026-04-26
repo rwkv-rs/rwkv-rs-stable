@@ -1,20 +1,20 @@
 use burn::{
     cubecl::{CubeCount, CubeDim},
-    tensor::{ops::FloatTensor, Shape},
+    tensor::{Shape, ops::FloatTensor},
 };
 use burn_cubecl::{
-    element::BoolElement,
-    tensor::CubeTensor,
     CubeBackend,
     CubeRuntime,
     FloatElement,
     IntElement,
+    element::BoolElement,
+    tensor::CubeTensor,
 };
 
 use crate::kernels::template::{
+    TemplateBackend,
     io::MatmulAddReluPrimitiveInputs,
     kernel::fused_matmul_add_relu_kernel,
-    TemplateBackend,
 };
 
 /// Implement our custom backend trait for the generic `CubeBackend`.
