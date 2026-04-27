@@ -8,12 +8,13 @@ use std::{
     collections::BTreeSet,
     ffi::OsStr,
     fs,
+    io::{self, IsTerminal},
     path::{Path, PathBuf},
     process::ExitCode,
 };
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use half::{bf16, f16};
 use safetensors::tensor::{Dtype, SafeTensors, TensorView};
 
@@ -43,6 +44,15 @@ struct Args {
     cos_min: f64,
     #[arg(long, default_value_t = 1e-12)]
     rel_eps: f64,
+    #[arg(long, value_enum, default_value_t = ColorMode::Auto)]
+    color: ColorMode,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum ColorMode {
+    Auto,
+    Always,
+    Never,
 }
 
 struct Tensor {
@@ -106,17 +116,22 @@ fn compare(args: Args) -> Result<bool> {
     }
 
     rows.sort_by(|a, b| {
-        (b.status != "PASS")
-            .cmp(&(a.status != "PASS"))
-            .then_with(|| {
-                b.max_abs
-                    .unwrap_or(f64::INFINITY)
-                    .total_cmp(&a.max_abs.unwrap_or(f64::INFINITY))
-            })
+        forward_key(&a.path)
+            .cmp(&forward_key(&b.path))
             .then_with(|| a.path.cmp(&b.path))
     });
-    print_rows(&rows, compared, missing, extra);
+    print_rows(&rows, compared, missing, extra, args.color.use_color());
     Ok(rows.iter().any(|row| row.status != "PASS"))
+}
+
+impl ColorMode {
+    fn use_color(self) -> bool {
+        match self {
+            Self::Auto => io::stdout().is_terminal(),
+            Self::Always => true,
+            Self::Never => false,
+        }
+    }
 }
 
 fn check_args(args: &Args) -> Result<()> {
@@ -381,7 +396,40 @@ fn issue(
     }
 }
 
-fn print_rows(rows: &[Row], compared: usize, missing: usize, extra: usize) {
+fn forward_key(path: &str) -> (u8, usize, u8) {
+    let trace = path.strip_suffix(".safetensors").unwrap_or(path);
+    match trace {
+        "embedding/token_ids" => return (0, 0, 0),
+        "embedding/embedded_context" => return (0, 0, 1),
+        "layer_norm0/embedded_context" => return (0, 0, 2),
+        "lm_head/embedded_context" => return (2, 0, 0),
+        "lm_head/logits" => return (2, 0, 1),
+        _ => {}
+    }
+
+    let Some(rest) = trace.strip_prefix("cells/cell_") else {
+        return (3, 0, 0);
+    };
+    let Some((cell, name)) = rest.split_once('/') else {
+        return (3, 0, 0);
+    };
+    let Ok(cell) = cell.parse::<usize>() else {
+        return (3, 0, 0);
+    };
+    let step = match name {
+        "pre_layer_norm_for_time_mix/embedded_context" => 0,
+        "time_mixer/value_from_first_cell" => 1,
+        "time_mixer/embedded_context" => 2,
+        "embedded_context_after_time_mixer" => 3,
+        "pre_layer_norm_for_channel_mix/embedded_context" => 4,
+        "channel_mixer/embedded_context" => 5,
+        "embedded_context_after_channel_mixer" => 6,
+        _ => return (3, 0, 0),
+    };
+    (1, cell, step)
+}
+
+fn print_rows(rows: &[Row], compared: usize, missing: usize, extra: usize, color: bool) {
     let header = [
         "status", "path", "dtype", "shape", "count", "max_abs", "mean_abs", "max_rel", "mean_rel",
         "cosine", "reason",
@@ -412,9 +460,17 @@ fn print_rows(rows: &[Row], compared: usize, missing: usize, extra: usize) {
     }
 
     // Trace paths are often longer than 64 chars; dynamic widths keep later columns readable.
-    print_line(&header.map(str::to_owned), &widths);
+    println!("{}", line(&header.map(str::to_owned), &widths));
     for row in &table {
-        print_line(row, &widths);
+        let text = line(row, &widths);
+        let status = &row[0];
+        if color && status == "PASS" {
+            println!("\x1b[32m{text}\x1b[0m");
+        } else if color && matches!(status.as_str(), "FAIL" | "MISSING" | "EXTRA") {
+            println!("\x1b[31m{text}\x1b[0m");
+        } else {
+            println!("{text}");
+        }
     }
 
     let passed = rows.iter().filter(|r| r.status == "PASS").count();
@@ -433,18 +489,19 @@ fn print_rows(rows: &[Row], compared: usize, missing: usize, extra: usize) {
     );
 }
 
-fn print_line(row: &[String; 11], widths: &[usize; 11]) {
+fn line(row: &[String; 11], widths: &[usize; 11]) -> String {
+    let mut line = String::new();
     for (i, value) in row.iter().enumerate() {
         if i > 0 {
-            print!("  ");
+            line.push_str("  ");
         }
         if (4..=9).contains(&i) {
-            print!("{value:>width$}", width = widths[i]);
+            line.push_str(&format!("{value:>width$}", width = widths[i]));
         } else {
-            print!("{value:<width$}", width = widths[i]);
+            line.push_str(&format!("{value:<width$}", width = widths[i]));
         }
     }
-    println!();
+    line
 }
 
 fn num(value: Option<f64>) -> String {
