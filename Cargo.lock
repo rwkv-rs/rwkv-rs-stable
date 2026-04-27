@@ -439,6 +439,7 @@ dependencies = [
  "cubecl",
  "cubek",
  "derive-new",
+ "half",
  "serde",
 ]
 
@@ -4308,6 +4309,12 @@ dependencies = [
 [[package]]
 name = "rwkv-test"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "half",
+ "safetensors 0.7.0",
+]
 
 [[package]]
 name = "ryu"

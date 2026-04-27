@@ -44,6 +44,9 @@ burn-ndarray = { version = "0.21.0-pre.3", default-features = false }
 # === Performance ===
 # === Frame ===
 # === Data Structures ===
+safetensors = { version = "0.7.0" }
+half = { version = "2.7.1", default-features = false }
+
 # === File ===
 # === Serialization ===
 serde = { version = "1.0.228", default-features = false, features = ["derive", "std"] }

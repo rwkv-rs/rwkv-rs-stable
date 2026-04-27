@@ -6,6 +6,10 @@ readme.workspace = true
 version.workspace = true
 
 [dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+half = { workspace = true }
+safetensors = { workspace = true }
 
 [lints]
 workspace = true
