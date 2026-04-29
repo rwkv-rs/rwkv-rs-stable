@@ -21,47 +21,23 @@ bench = false
 [[bench]]
 name = "addcmul_forward"
 harness = false
-path = "benches/kernels/addcmul/forward.rs"
+path = "benches/kernels/template/addcmul/forward.rs"
 
 [[bench]]
 name = "addcmul_backward"
 harness = false
-path = "benches/kernels/addcmul/backward.rs"
+path = "benches/kernels/template/addcmul/backward.rs"
 
 [[bench]]
 name = "token_shift_diff_forward"
 harness = false
-path = "benches/kernels/token_shift_diff/forward.rs"
+path = "benches/kernels/template/token_shift_diff/forward.rs"
 
 [[bench]]
 name = "token_shift_diff_backward"
 harness = false
-path = "benches/kernels/token_shift_diff/backward.rs"
+path = "benches/kernels/template/token_shift_diff/backward.rs"
 
-[[bench]]
-name = "train_time_mixer_mix6_forward"
-harness = false
-path = "benches/kernels/train/time_mixer/mix6/forward.rs"
-
-[[bench]]
-name = "train_time_mixer_mix6_backward"
-harness = false
-path = "benches/kernels/train/time_mixer/mix6/backward.rs"
-
-[[bench]]
-name = "train_time_mixer_wkv7_forward"
-harness = false
-path = "benches/kernels/train/time_mixer/wkv7/forward.rs"
-
-[[bench]]
-name = "train_channel_mixer_forward"
-harness = false
-path = "benches/kernels/train/channel_mixer/forward.rs"
-
-[[bench]]
-name = "train_channel_mixer_backward"
-harness = false
-path = "benches/kernels/train/channel_mixer/backward.rs"
 
 [features]
 default = []
