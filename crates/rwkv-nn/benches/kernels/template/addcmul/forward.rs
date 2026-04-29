@@ -4,7 +4,7 @@ use std::hint::black_box;
 
 use burn::{Tensor, prelude::Backend, tensor::Distribution};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use rwkv_nn::kernels::addcmul::{
+use rwkv_nn::kernels::template::addcmul::{
     addcmul_custom,
     addcmul_reference,
     addcmul5_custom,
@@ -14,7 +14,7 @@ use rwkv_nn::kernels::addcmul::{
 
 use crate::common::{CONTEXT_LEN, EMBEDDED_DIM};
 
-#[path = "../../mod.rs"]
+#[path = "../../../mod.rs"]
 mod common;
 
 type B = common::BenchBackend;

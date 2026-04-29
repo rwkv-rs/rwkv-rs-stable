@@ -8,7 +8,7 @@ use burn::{
     tensor::{Distribution, Tensor, TensorData},
 };
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use rwkv_nn::kernels::token_shift_diff::{
+use rwkv_nn::kernels::template::token_shift_diff::{
     io::TokenShiftDiffForwardInputs,
     token_shift_diff_custom,
     token_shift_diff_reference,
@@ -16,7 +16,7 @@ use rwkv_nn::kernels::token_shift_diff::{
 
 use crate::common::{CONTEXT_LEN, EMBEDDED_DIM};
 
-#[path = "../../mod.rs"]
+#[path = "../../../mod.rs"]
 mod common;
 
 type B = common::BenchBackend;
@@ -93,7 +93,7 @@ fn make_inputs<B: Backend>(
     device: &B::Device,
 ) -> TokenShiftDiffForwardInputs<B>
 where
-    B: rwkv_nn::kernels::token_shift_diff::TokenShiftDiffBackend,
+    B: rwkv_nn::kernels::template::token_shift_diff::TokenShiftDiffBackend,
 {
     let ids = (0..batch_size)
         .map(|batch_index| ((batch_index * 2 + 1) % full_batch_size) as i32)

@@ -2,10 +2,11 @@
 #![warn(rustdoc::broken_intra_doc_links)]
 #![warn(rustdoc::invalid_html_tags)]
 
-// pub mod cells;
-// pub mod functions;
+pub mod cells;
+pub mod functions;
 pub mod kernels;
-// pub mod layers;
-// pub mod modules;
+mod layers;
+pub mod models;
+mod modules;
 
 pub mod test_utils;
