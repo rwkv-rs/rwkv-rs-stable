@@ -10,16 +10,7 @@ use burn_cubecl::{
         calculate_cube_count_elemwise,
         prelude::*,
         tensor_vector_size_parallel,
-        tune::{
-            AsFunctionTunable,
-            AutotuneKey,
-            LocalTuner,
-            Tunable,
-            TunableSet,
-            TuneGroup,
-            anchor,
-            local_tuner,
-        },
+        tune::{AutotuneKey, LocalTuner, Tunable, TunableSet, TuneGroup, anchor, local_tuner},
     },
     element::BoolElement,
     ops::numeric::empty_device,
@@ -68,7 +59,7 @@ pub(crate) fn fused_learning_rate_gate<
     } = inputs;
     let client = learning_rate_input.client.clone();
 
-    let key = |learning_rate_base: &CubeTensor<R>, learning_rate_input: &CubeTensor<R>| {
+    let key = |(learning_rate_base, learning_rate_input): &(CubeTensor<R>, CubeTensor<R>)| {
         let shape = learning_rate_input.meta.shape();
 
         LearningRateGateForwardAutotuneKey {
@@ -79,11 +70,11 @@ pub(crate) fn fused_learning_rate_gate<
         }
     };
 
-    let input_gen = |_key: &LearningRateGateForwardAutotuneKey,
-                     learning_rate_base: &CubeTensor<R>,
-                     learning_rate_input: &CubeTensor<R>| {
-        (learning_rate_base.copy(), learning_rate_input.copy())
-    };
+    let input_gen =
+        |_key: &LearningRateGateForwardAutotuneKey,
+         (learning_rate_base, learning_rate_input): &(CubeTensor<R>, CubeTensor<R>)| {
+            (learning_rate_base.copy(), learning_rate_input.copy())
+        };
 
     static TUNER: LocalTuner<LearningRateGateForwardAutotuneKey, CubeTuneId> =
         local_tuner!("learning-rate-gate-forward");
@@ -96,16 +87,14 @@ pub(crate) fn fused_learning_rate_gate<
         for line_size in LINE_SIZE_CANDIDATES {
             set = set.with(
                 Tunable::new(
-                    format!("line_size_{line_size}"),
-                    (move |learning_rate_base: CubeTensor<R>,
-                           learning_rate_input: CubeTensor<R>| {
-                        learning_rate_gate::<R, F>(
+                    &format!("line_size_{line_size}"),
+                    move |(learning_rate_base, learning_rate_input)| {
+                        Ok::<_, String>(learning_rate_gate::<R, F>(
                             learning_rate_base,
                             learning_rate_input,
                             line_size,
-                        )
-                    })
-                    .ok(),
+                        ))
+                    },
                 )
                 .group(&line_size_group, move |key| {
                     if line_size <= key.max_line_size && key.embedded_dim.is_multiple_of(line_size)

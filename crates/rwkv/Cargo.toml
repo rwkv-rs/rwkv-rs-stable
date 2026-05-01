@@ -16,10 +16,11 @@ readme.workspace = true
 version.workspace = true
 
 [features]
-default = ["nn"]
+default = ["nn", "config"]
 store = ["dep:burn-store"]
 
-#data = ["dep:rwkv-data"]
+config = ["dep:rwkv-config"]
+data = ["dep:rwkv-data"]
 nn = ["dep:rwkv-nn"]
 #train = ["dep:rwkv-train"]
 #infer = ["dep:rwkv-infer"]
@@ -38,8 +39,8 @@ nn = ["dep:rwkv-nn"]
 burn = { workspace = true, default-features = false, features = ["std"] }
 burn-store = { workspace = true, default-features = false, optional = true }
 
-#rwkv-config = { path = "../rwkv-config" }
-#rwkv-data = { path = "../rwkv-data", optional = true }
+rwkv-config = { path = "../rwkv-config", optional = true }
+rwkv-data = { path = "../rwkv-data", optional = true }
 rwkv-nn = { path = "../rwkv-nn", default-features = false, optional = true }
 #rwkv-train = { path = "../rwkv-train", default-features = false, optional = true }
 #rwkv-infer = { path = "../rwkv-infer", default-features = false, optional = true }

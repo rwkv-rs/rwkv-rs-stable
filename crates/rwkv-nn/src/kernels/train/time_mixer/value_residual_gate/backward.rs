@@ -22,7 +22,6 @@ use burn_cubecl::{
         prelude::*,
         tensor_vector_size_parallel,
         tune::{
-            AsFunctionTunable,
             AutotuneKey,
             AutotuneOutput,
             LocalTuner,
@@ -113,42 +112,48 @@ where
                 );
 
                 let client = value.client.clone();
-                let key = |value: &CubeTensor<R>,
-                           value_from_first_cell: &CubeTensor<R>,
-                           gate_base: &CubeTensor<R>,
-                           gate_input: &CubeTensor<R>,
-                           output_grad: &CubeTensor<R>| {
-                    let shape = value.meta.shape();
+                let key =
+                    |(value, value_from_first_cell, gate_base, gate_input, output_grad): &(
+                        CubeTensor<R>,
+                        CubeTensor<R>,
+                        CubeTensor<R>,
+                        CubeTensor<R>,
+                        CubeTensor<R>,
+                    )| {
+                        let shape = value.meta.shape();
 
-                    ValueResidualGateBackwardAutotuneKey {
-                        dtype: value.dtype,
-                        num_elements: anchor(shape.num_elements(), None, Some(1), None),
-                        embedded_dim: shape[2],
-                        bt_len: anchor(shape[0] * shape[1], None, Some(1), None),
-                        max_line_size: max_line_size_backward(
-                            value,
-                            value_from_first_cell,
-                            gate_base,
-                            gate_input,
-                            output_grad,
-                        ),
-                    }
-                };
+                        ValueResidualGateBackwardAutotuneKey {
+                            dtype: value.dtype,
+                            num_elements: anchor(shape.num_elements(), None, Some(1), None),
+                            embedded_dim: shape[2],
+                            bt_len: anchor(shape[0] * shape[1], None, Some(1), None),
+                            max_line_size: max_line_size_backward(
+                                value,
+                                value_from_first_cell,
+                                gate_base,
+                                gate_input,
+                                output_grad,
+                            ),
+                        }
+                    };
 
-                let input_gen = |_key: &ValueResidualGateBackwardAutotuneKey,
-                                 value: &CubeTensor<R>,
-                                 value_from_first_cell: &CubeTensor<R>,
-                                 gate_base: &CubeTensor<R>,
-                                 gate_input: &CubeTensor<R>,
-                                 output_grad: &CubeTensor<R>| {
-                    (
-                        value.copy(),
-                        value_from_first_cell.copy(),
-                        gate_base.copy(),
-                        gate_input.copy(),
-                        output_grad.copy(),
-                    )
-                };
+                let input_gen =
+                    |_key: &ValueResidualGateBackwardAutotuneKey,
+                     (value, value_from_first_cell, gate_base, gate_input, output_grad): &(
+                        CubeTensor<R>,
+                        CubeTensor<R>,
+                        CubeTensor<R>,
+                        CubeTensor<R>,
+                        CubeTensor<R>,
+                    )| {
+                        (
+                            value.copy(),
+                            value_from_first_cell.copy(),
+                            gate_base.copy(),
+                            gate_input.copy(),
+                            output_grad.copy(),
+                        )
+                    };
 
                 static TUNER: LocalTuner<ValueResidualGateBackwardAutotuneKey, CubeTuneId> =
                     local_tuner!("value-residual-gate-backward");
@@ -167,14 +172,23 @@ where
                                 for use_pow2_index in [false, true] {
                                     set = set.with(
                                         Tunable::new(
-                                            format!(
+                                            &format!(
                                                 "line_{line_size}_block_{block_size}_bt_{bt_tile}_pow2_{use_pow2_index}"
                                             ),
-                                            (move |value: CubeTensor<R>,
-                                                   value_from_first_cell: CubeTensor<R>,
-                                                   gate_base: CubeTensor<R>,
-                                                   gate_input: CubeTensor<R>,
-                                                   output_grad: CubeTensor<R>| {
+                                            move |(
+                                                value,
+                                                value_from_first_cell,
+                                                gate_base,
+                                                gate_input,
+                                                output_grad,
+                                            ): (
+                                                CubeTensor<R>,
+                                                CubeTensor<R>,
+                                                CubeTensor<R>,
+                                                CubeTensor<R>,
+                                                CubeTensor<R>,
+                                            )| {
+                                                Ok::<_, String>({
                                                 let shape = value.meta.shape().clone();
                                                 let embedded_dim = shape[2];
                                                 let client = value.client.clone();
@@ -354,8 +368,8 @@ where
                                                     gate_base_grad,
                                                     gate_input_grad,
                                                 }
-                                            })
-                                            .ok(),
+                                                })
+                                            },
                                         )
                                         .group(&launch_group, move |key| {
                                             let channel_vecs = key.embedded_dim / line_size;

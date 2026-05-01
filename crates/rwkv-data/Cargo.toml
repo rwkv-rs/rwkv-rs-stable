@@ -1,0 +1,84 @@
+[package]
+name = "rwkv-data"
+authors = ["caizus <18930215187@163.com>"]
+description = "Memory-mapped dataset readers, tokenizers, and samplers for RWKV training pipelines"
+
+rust-version = "1.95"
+autobenches = false
+
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+version.workspace = true
+
+[lib]
+bench = false
+
+[[bench]]
+name = "tokenizer"
+harness = false
+
+[[bench]]
+name = "processor"
+harness = false
+
+[[bench]]
+name = "mmap"
+harness = false
+
+[dependencies]
+# === CLI & GUI ===
+indicatif = { workspace = true }
+
+# === Log & Trace ===
+log = { workspace = true }
+
+# === Text Processing ===
+regex = { workspace = true }
+unescape = { workspace = true }
+unicode-segmentation = { workspace = true }
+unicode-script = { workspace = true }
+unicode-normalization = { workspace = true }
+
+# === Compression ===
+zstd = { workspace = true }
+
+# === Math & Algorithms ===
+primes = { workspace = true }
+
+# === Deep Learning Core ===
+burn = { workspace = true, default-features = false, features = ["std"] }
+
+# === Performance ===
+tokio = { workspace = true, features = ["fs", "io-util", "rt", "sync"] }
+rayon = { workspace = true }
+futures = { workspace = true }
+
+# === Data Structures ===
+once_cell = { workspace = true }
+dashmap = { workspace = true }
+xxhash-rust = { workspace = true, features = ["xxh3"] }
+bytemuck = { workspace = true }
+
+# === File ===
+memmap2 = { workspace = true }
+
+# === Serialization ===
+serde = { workspace = true }
+sonic-rs = { workspace = true }
+csv-async = { workspace = true, features = ["tokio", "with_serde"] }
+parquet = { workspace = true }
+
+# === Database ===
+redb = { workspace = true }
+
+# === Local Dependencies ===
+rwkv-derive = { path = "../rwkv-derive" }
+rwkv-config = { path = "../rwkv-config", default-features = false, features = ["train"] }
+
+[dev-dependencies]
+# === Unitest & Bench ===
+criterion = { workspace = true }
+
+# === File ===
+tempfile = { workspace = true }

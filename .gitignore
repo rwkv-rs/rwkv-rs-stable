@@ -26,10 +26,6 @@ reference_for_agents/
 .DS_Store
 
 # Repo-specific data / logs
-/logs
-/examples/rwkv-lm/config/train/logs
-/examples/rwkv-lm/logs
-/examples/rwkv-lm/weights
-/examples/rwkv-lm-eval/datasets/
-/examples/rwkv-lm/data/rwkv_vocab_v20230424/minipile.bin
-/examples/rwkv-lm/data/rwkv_vocab_v20230424/minipile.idx
+logs/
+data/
+weights/

@@ -3,7 +3,7 @@
 use std::hint::black_box;
 
 use burn::{Tensor, backend::Autodiff, prelude::Backend, tensor::Distribution};
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion};
 use rwkv_nn::kernels::template::addcmul::{
     addcmul_custom,
     addcmul_reference,
@@ -12,19 +12,16 @@ use rwkv_nn::kernels::template::addcmul::{
     io::{Addcmul5ForwardInputs, AddcmulForwardInputs},
 };
 
-use crate::common::{CONTEXT_LEN, EMBEDDED_DIM};
+use crate::common::{self, CONTEXT_LEN, EMBEDDED_DIM};
 
-#[path = "../../../mod.rs"]
-mod common;
-
-type B = common::BenchBackend;
+type B = crate::common::BenchBackend;
 type A = Autodiff<B>;
 
-fn addcmul_backward(c: &mut Criterion) {
-    let device = common::device::<A>();
+pub(crate) fn addcmul_backward(c: &mut Criterion) {
+    let device = crate::common::device::<A>();
     let mut group = c.benchmark_group("rwkv-nn/kernels/addcmul/backward");
 
-    for bsz in common::BATCH_SIZES {
+    for bsz in crate::common::BATCH_SIZES {
         let inputs = AddcmulForwardInputs {
             base: Tensor::<A, 3>::random(
                 [bsz, CONTEXT_LEN, EMBEDDED_DIM],
@@ -91,12 +88,11 @@ fn addcmul_backward(c: &mut Criterion) {
 
     group.finish();
 }
-
-fn addcmul5_backward(c: &mut Criterion) {
-    let device = common::device::<A>();
+pub(crate) fn addcmul5_backward(c: &mut Criterion) {
+    let device = crate::common::device::<A>();
     let mut group = c.benchmark_group("rwkv-nn/kernels/addcmul5/backward");
 
-    for bsz in common::BATCH_SIZES {
+    for bsz in crate::common::BATCH_SIZES {
         let inputs = Addcmul5ForwardInputs {
             base: Tensor::<A, 3>::random(
                 [bsz, CONTEXT_LEN, EMBEDDED_DIM],
@@ -227,6 +223,3 @@ fn addcmul5_backward(c: &mut Criterion) {
 
     group.finish();
 }
-
-criterion_group!(benches, addcmul_backward, addcmul5_backward);
-criterion_main!(benches);

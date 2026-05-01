@@ -17,6 +17,7 @@ use crate::{
 };
 
 #[derive(Config, Debug)]
+/// Configuration for a stack of causal RWKV cells.
 pub struct MultiCausalCellsConfig {
     num_cells: usize,
     embedded_dim: usize,
@@ -25,6 +26,7 @@ pub struct MultiCausalCellsConfig {
 }
 
 impl MultiCausalCellsConfig {
+    /// Initializes the causal cell stack on `device`.
     pub fn init<B: Backend>(&self, device: &B::Device) -> MultiCausalCells<B> {
         MultiCausalCells {
             cells: (0..self.num_cells)
@@ -48,7 +50,9 @@ impl MultiCausalCellsConfig {
 }
 
 #[derive(Module, Debug)]
+/// Ordered stack of causal RWKV cells.
 pub struct MultiCausalCells<B: Backend> {
+    /// Per-layer causal cells.
     pub cells: Vec<CausalCell<B>>,
 
     num_cells: usize,
@@ -58,6 +62,7 @@ pub struct MultiCausalCells<B: Backend> {
 }
 
 impl<B: Backend> MultiCausalCells<B> {
+    /// Initializes all cell weights in place.
     pub fn init_weights(&mut self, device: &B::Device) {
         self.cells
             .iter_mut()
@@ -68,6 +73,7 @@ impl<B: Backend> MultiCausalCells<B> {
         feature = "trace",
         tracing::instrument(name = "rwkv.infer.model.cells", skip_all)
     )]
+    /// Runs the input through each causal cell in order.
     pub fn forward(&self, multi_causal_cells_input: MultiCausalCellsIO<B>) -> MultiCausalCellsIO<B>
     where
         B: AddcmulBackend + TokenShiftDiffBackend + Mix6Backend + Wkv7Backend,
@@ -126,20 +132,30 @@ impl<B: Backend> MultiCausalCells<B> {
     }
 }
 
+/// Input and output tensors for [`MultiCausalCells`].
 pub struct MultiCausalCellsIO<B: Backend> {
+    /// Embedded context with shape `[batch_size, context_length, embedded_dim]`.
     pub embedded_context: Tensor<B, 3>, // [batch_size, context_length, embedded_dim]
+    /// Optional per-cell recurrent state with shape `num_cells * [batch_size, num_heads, head_size, head_size]`.
     pub state: Option<Vec<Tensor<B, 4>>>, // num_cells [batch_size, num_heads, head_size, head_size]
+    /// Optional per-cell previous embedding for channel-mix token shift.
     pub embedded_token_shift_for_channel_mix: Option<Vec<Tensor<B, 2>>>, // num_cells [batch_size, embedded_dim]
 }
 
+/// Inference-time input state for a multi-cell causal stack.
 pub struct MultiCausalCellsInferIO<B: Backend> {
-    pub embedded_tokens: Tensor<B, 2>,    // [num_tokens, embedded_dim]
-    pub cursors: Tensor<B, 1, Int>,       // [batch_size]
+    /// Embedded tokens with shape `[num_tokens, embedded_dim]`.
+    pub embedded_tokens: Tensor<B, 2>, // [num_tokens, embedded_dim]
+    /// Cursor positions for each batch item.
+    pub cursors: Tensor<B, 1, Int>, // [batch_size]
+    /// Optional per-cell recurrent state with shape `num_cells * [batch_size, num_heads, head_size, head_size]`.
     pub state: Option<Vec<Tensor<B, 4>>>, // num_cells [batch_size, num_heads, head_size, head_size]
+    /// Optional per-cell previous embedding for channel-mix token shift.
     pub embedded_token_shift_for_channel_mix: Option<Vec<Tensor<B, 2>>>, // num_cells [batch_size, embedded_dim]
 }
 
 #[derive(Config, Debug)]
+/// Configuration for one causal RWKV cell.
 pub struct CausalCellConfig {
     num_cells: usize,
     embedded_dim: usize,
@@ -148,6 +164,7 @@ pub struct CausalCellConfig {
 }
 
 impl CausalCellConfig {
+    /// Initializes one causal cell for `cell_id` on `device`.
     pub fn init<B: Backend>(&self, cell_id: usize, device: &B::Device) -> CausalCell<B> {
         CausalCell {
             pre_layer_norm_for_time_mix: LayerNormConfig::new(self.embedded_dim).init(device),
@@ -167,10 +184,15 @@ impl CausalCellConfig {
 }
 
 #[derive(Module, Debug)]
+/// One RWKV causal block with time-mix and channel-mix submodules.
 pub struct CausalCell<B: Backend> {
+    /// Layer normalization applied before time mixing.
     pub pre_layer_norm_for_time_mix: LayerNorm<B>,
+    /// Layer normalization applied before channel mixing.
     pub pre_layer_norm_for_channel_mix: LayerNorm<B>,
+    /// Time-mixer submodule.
     pub time_mixer: TimeMixer<B>,
+    /// Channel-mixer submodule.
     pub channel_mixer: ChannelMixer<B>,
 
     #[module(skip)]
@@ -178,6 +200,7 @@ pub struct CausalCell<B: Backend> {
 }
 
 impl<B: Backend> CausalCell<B> {
+    /// Initializes time-mixer and channel-mixer weights in place.
     pub fn init_weights(&mut self, device: &B::Device) {
         self.time_mixer.init_weights(device);
         self.channel_mixer.init_weights(device);
@@ -186,6 +209,7 @@ impl<B: Backend> CausalCell<B> {
 
 impl<B: AddcmulBackend + TokenShiftDiffBackend + Mix6Backend + Wkv7Backend> CausalCell<B> {
     #[cfg_attr(feature = "trace", tracing::instrument(name = "rwkv.infer.model.cell", skip_all, fields(cell_id = self.cell_id)))]
+    /// Runs one causal cell forward pass.
     pub fn forward(&self, causal_cell_input: CausalCellIO<B>) -> CausalCellIO<B> {
         let embedded_context = causal_cell_input.embedded_context;
 
@@ -224,9 +248,14 @@ impl<B: AddcmulBackend + TokenShiftDiffBackend + Mix6Backend + Wkv7Backend> Caus
     }
 }
 
+/// Input and output tensors for one [`CausalCell`].
 pub struct CausalCellIO<B: Backend> {
+    /// Embedded context with shape `[batch_size, context_len, embedded_dim]`.
     pub embedded_context: Tensor<B, 3>, // [batch_size, context_len, embedded_dim]
+    /// Value residual from the first cell with shape `[batch_size, context_len, embedded_dim]`.
     pub value_from_first_cell: Tensor<B, 3>, // [batch_size, context_len, embedded_dim]
-    pub state: Option<Tensor<B, 4>>,    // [batch_size, num_heads, head_size, head_size]
+    /// Optional recurrent state with shape `[batch_size, num_heads, head_size, head_size]`.
+    pub state: Option<Tensor<B, 4>>, // [batch_size, num_heads, head_size, head_size]
+    /// Optional previous embedding for channel-mix token shift.
     pub embedded_token_shift_for_channel_mix: Option<Tensor<B, 2>>, // [batch_size, embedded_dim]
 }

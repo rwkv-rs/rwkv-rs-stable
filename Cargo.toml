@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "./crates/*",
-    # "./examples/*"
+     "./examples/*",
     "./xtask",
 ]
 
@@ -21,41 +21,80 @@ invalid_html_tags = "deny"
 [workspace.dependencies]
 # === CLI & GUI ===
 clap = { version = "4.6.1", default-features = false, features = ["color", "derive", "error-context", "help", "std", "suggestions", "usage"] }
+indicatif = { version = "0.18.4", default-features = false }
 
 # === Unitest & Bench ===
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+trybuild = { version = "1.0.116" }
 
 # === Log & Trace ===
+log = { version = "0.4.29", default-features = false }
 tracing = { version = "0.1.44", default-features = false, features = ["attributes", "std"] }
+
 # === Exception Handling ===
 thiserror = { version = "2.0.18", default-features = false }
 anyhow = { version = "1.0.102", default-features = false, features = ["std"] }  # for xtask
 
+# === Text Processing ===
+regex = { version = "1.12.3", default-features = false }
+unescape = { version = "0.1.0", default-features = false }
+unicode-segmentation = { version = "1.13.2", default-features = false }
+unicode-script = { version = "0.5.8", default-features = false }
+unicode-normalization = { version = "0.1.25", default-features = false }
+
+# === Compression ===
+zstd = { version = "0.13.3", default-features = false }
+
+# === Math & Algorithms ===
+primes = { version = "0.4.0", default-features = false }
+
 # === Deep Learning Core ===
-burn = { version = "0.21.0-pre.3", default-features = false }
-burn-train = { version = "0.21.0-pre.3", default-features = false }
-burn-fusion = { version = "0.21.0-pre.3", default-features = false }
-burn-cubecl = { version = "0.21.0-pre.3", default-features = false }
-burn-ir = { version = "0.21.0-pre.3", default-features = false }
-burn-store = { version = "0.21.0-pre.3", default-features = false }
-burn-optim = { version = "0.21.0-pre.3", default-features = false }
-burn-ndarray = { version = "0.21.0-pre.3", default-features = false }
+burn = { version = "0.21.0-pre.4", default-features = false }
+burn-train = { version = "0.21.0-pre.4", default-features = false }
+burn-fusion = { version = "0.21.0-pre.4", default-features = false }
+burn-cubecl = { version = "0.21.0-pre.4", default-features = false }
+burn-ir = { version = "0.21.0-pre.4", default-features = false }
+burn-store = { version = "0.21.0-pre.4", default-features = false }
+burn-optim = { version = "0.21.0-pre.4", default-features = false }
+burn-ndarray = { version = "0.21.0-pre.4", default-features = false }
 
 # === Performance ===
+tokio = { version = "1.52.1", default-features = false }
+rayon = { version = "1.12.0", default-features = false }
+futures = { version = "0.3.32", default-features = false }
+
 # === Frame ===
+axum = { version = "0.8.9", default-features = false }
+
 # === Data Structures ===
+once_cell = { version = "1.21.4" }
+dashmap = { version = "7.0.0-rc2", default-features = false }
+xxhash-rust = { version = "0.8.15", default-features = false }
 safetensors = { version = "0.7.0" }
 half = { version = "2.7.1", default-features = false }
+bytemuck = { version = "1.25.0", default-features = false, features = ["derive"] }
 
 # === File ===
+tempfile = { version = "3.27.0", default-features = false }
+toml = { version = "1.1.2", default-features = false }
+memmap2 = { version = "0.9.10", default-features = false }
+
 # === Serialization ===
 serde = { version = "1.0.228", default-features = false, features = ["derive", "std"] }
 sonic-rs = { version = "0.5.8", default-features = false } # instead of serde_json!!!
+csv-async = { version = "1.3.1", default-features = false }
+parquet = { version = "58.1.0", default-features = false }
 
 # === CI/CD ===
 xshell = { version = "0.3.0-pre.2", default-features = false }
 
 # === Database ===
+redb = { version = "4.1.0", default-features = false }
+
+# === Macro ===
+proc-macro2 = { version = "1.0.106", default-features = false }
+quote = { version = "1.0.45", default-features = false }
+syn = { version = "2.0.117", default-features = false }
 
 
 [profile.release]

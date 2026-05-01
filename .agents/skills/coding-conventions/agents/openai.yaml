@@ -1,0 +1,4 @@
+interface:
+  display_name: "Coding Conventions"
+  short_description: "Rust style and implementation constraints"
+  default_prompt: "Use $coding-conventions to follow this repository's Rust rules."

@@ -6,6 +6,7 @@ use burn::{
 
 use crate::functions::qr::qr;
 
+/// Initializes a two-dimensional parameter from a uniform distribution.
 pub fn uniform_init<B: Backend>(param: &mut Param<Tensor<B, 2>>, low: f64, high: f64) {
     let shape = param.shape();
 
@@ -16,6 +17,7 @@ pub fn uniform_init<B: Backend>(param: &mut Param<Tensor<B, 2>>, low: f64, high:
     *param = Param::from_tensor(uniform_tensor);
 }
 
+/// Initializes a parameter to all zeros.
 pub fn zeros_init<B: Backend, const D: usize>(param: &mut Param<Tensor<B, D>>) {
     let shape = param.shape();
 
@@ -26,6 +28,7 @@ pub fn zeros_init<B: Backend, const D: usize>(param: &mut Param<Tensor<B, D>>) {
     *param = Param::from_tensor(zeros_tensor);
 }
 
+/// Initializes a parameter to all ones.
 pub fn ones_init<B: Backend, const D: usize>(param: &mut Param<Tensor<B, D>>) {
     let shape = param.shape();
 
@@ -36,6 +39,7 @@ pub fn ones_init<B: Backend, const D: usize>(param: &mut Param<Tensor<B, D>>) {
     *param = Param::from_tensor(ones_tensor);
 }
 
+/// Initializes a parameter to a constant scalar value.
 pub fn constant_init<B: Backend, const D: usize>(param: &mut Param<Tensor<B, D>>, value: f64) {
     let shape = param.shape();
 
@@ -46,6 +50,7 @@ pub fn constant_init<B: Backend, const D: usize>(param: &mut Param<Tensor<B, D>>
     *param = Param::from_tensor(constant_tensor);
 }
 
+/// Calculates per-channel decay speeds for time-mixer initialization.
 pub fn calculate_decay_speed<B: Backend>(
     num_cells: usize,
     embedded_dim: usize,
@@ -67,6 +72,7 @@ pub fn calculate_decay_speed<B: Backend>(
     Tensor::from_floats(combined_vec.as_slice(), device)
 }
 
+/// Calculates token-shift difference scales for time-mixer initialization.
 pub fn get_token_shift_diff_scale<B: Backend>(
     num_cells: usize,
     embedded_dim: usize,
@@ -83,6 +89,7 @@ pub fn get_token_shift_diff_scale<B: Backend>(
     one_tensor - ratio_tensor.powf_scalar(power * layer_ratio)
 }
 
+/// Calculates token-shift weights with the current offset convention.
 pub fn calculate_token_shift_with_offset<B: Backend>(
     num_cells: usize,
     embedded_dim: usize,
@@ -100,6 +107,7 @@ pub fn calculate_token_shift_with_offset<B: Backend>(
     one_tensor - ratio_tensor.powf_scalar(power * layer_ratio)
 }
 
+/// Initializes a two-dimensional parameter with an orthogonal matrix.
 pub fn orthogonal_init<B: Backend>(param: &mut Param<Tensor<B, 2>>, gain: Option<f32>) {
     let [rows, cols] = param.dims();
 
@@ -199,6 +207,7 @@ fn get_decay_base_vec(num_cells: usize, embedded_dim: usize, cell_id: usize) -> 
         .collect()
 }
 
+/// Returns the LoRA bias for learning-rate gate initialization.
 pub fn get_learning_rate_lora_bias<B: Backend>(
     embedded_dim: usize,
     head_size: usize,
@@ -217,6 +226,7 @@ pub fn get_learning_rate_lora_bias<B: Backend>(
     Tensor::from_floats(combined_vec.as_slice(), device)
 }
 
+/// Returns the LoRA bias for value residual gate initialization.
 pub fn get_value_lora_bias<B: Backend>(embedded_dim: usize, device: &B::Device) -> Tensor<B, 1> {
     let linear_vec = get_centered_linear_vec(embedded_dim);
 

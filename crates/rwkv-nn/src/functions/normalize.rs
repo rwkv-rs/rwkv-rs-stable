@@ -1,5 +1,11 @@
 use burn::prelude::{Backend, Tensor};
 
+/// Normalizes `input` by its p-norm along `dim`.
+///
+/// # Panics
+///
+/// Panics when `dim` is outside the tensor rank after negative-index
+/// adjustment.
 pub fn normalize<B: Backend, const D: usize>(
     input: Tensor<B, D>,
     p: f32,

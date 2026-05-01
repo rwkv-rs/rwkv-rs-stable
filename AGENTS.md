@@ -1,40 +1,42 @@
 # Repository Guidelines
 
-## 使用方式
-本文件只保留高优先级约束与导航. 遇到具体任务时, 先按当前需求判断是否需要继续阅读 `note_for_agents/` 下对应专题文档, 不要一次性加载全部说明.
+## Usage
+This file keeps only high-priority constraints and navigation. For a concrete task, first decide whether to read the corresponding skill. Do not load all instructions at once.
 
-建议按需阅读:
-- 项目结构与各 crate 职责: `note_for_agents/project_structure.md`
-- 构建, 测试, 基准与常用命令: `note_for_agents/development_workflow.md`
-- 测试与基准镜像目录规范: `note_for_agents/testing_layout.md`
-- 编译, 测试, 基准与回归检查规范: `note_for_agents/verification_standards.md`
-- 代码风格, 命名与实现约束: `note_for_agents/coding_conventions.md`
-- Code review 约束与 reviewer 行为规范: `note_for_agents/code_review.md`
-- 提交与 PR 规范: `note_for_agents/commit_and_pr.md`
+Read as needed:
+- Project structure and crate responsibilities: `$project-structure`
+- Build, test, benchmark, and common commands: `$development-workflow`
+- Test and benchmark mirrored-directory conventions: `$testing-layout`
+- Compile, test, benchmark, and regression-check standards: `$verification-standards`
+- Coding style, naming, and implementation constraints: `$coding-conventions`
+- Code review constraints and reviewer behavior: `$code-review`
+- Commit and PR conventions: `$commit-and-pr`
+- Source comments and documentation workflow: `$documentation-workflow`
 
-## 高优先级规则
-- 先做目标对齐, 再展开方案设计或实现. 若用户强调“按官方/社区常见做法”, 不要先发明仓库私有流程, 工具或门禁.
-- 优先采用 Rust 官方与主流社区共识中的最小充分方案; 只有在现有主流做法明确不满足目标时, 才考虑额外机制, 且必须先说明缺口.
-- 本仓库是 Rust workspace, 依赖版本统一由 workspace 管理; 新增或调整依赖时, 优先修改根 `Cargo.toml`.
-- 不要提交任何密钥或敏感信息, 例如 `HF_TOKEN`, 代理配置, 部署环境变量.
-- 修改代码前先选择最小必要范围阅读说明; 修改后至少执行与变更范围匹配的验证命令. 涉及测试/基准的目录放置与命名时, 以 `note_for_agents/testing_layout.md` 为准; 涉及验收门槛与回归检查时, 以 `note_for_agents/verification_standards.md` 为准.
-- commit 前默认先运行 `cargo run-checks`; 若只做局部改动且明确采用更小范围验证, 需在提交说明或 PR 描述中写明实际执行的命令.
-- 格式化与格式检查统一使用 `cargo +nightly fmt --all` 或 `cargo xtask check format`; 不要以 stable `cargo fmt --all` 作为最终格式依据.
-- 进行 code review, PR review 或 pre-merge 检查时, 默认主动使用 `pragmatic-clean-code-reviewer`, 并额外遵守 `note_for_agents/code_review.md` 中对 Rust 项目和本仓库约定的补充约束.
-- 提交信息使用约定式提交, 格式保持简短, 可定位, 例如 `fix(rwkv-infer): ...`.
+## High-Priority Rules
+- Align on the goal before expanding into solution design or implementation. If the user emphasizes "official/community common practice", do not invent repository-private workflows, tools, or gates first.
+- Prefer the minimum sufficient approach from official Rust guidance and mainstream community consensus. Consider additional mechanisms only when current mainstream practice clearly cannot satisfy the goal, and explain the gap first.
+- This repository is a Rust workspace. Dependency versions are managed by the workspace. When adding or adjusting dependencies, prefer editing the root `Cargo.toml`.
+- Do not commit secrets or sensitive information, such as `HF_TOKEN`, proxy configuration, or deployment environment variables.
+- Before modifying code, read the minimum necessary skill instructions. After modifying code, run verification commands that match the change scope. For test/benchmark placement and naming, follow `$testing-layout`. For acceptance thresholds and regression checks, follow `$verification-standards`.
+- Before committing, run `cargo run-checks` by default. If a local change clearly uses narrower verification, write the commands actually run in the commit note or PR description.
+- Use `cargo +nightly fmt --all` or `cargo xtask check format` for formatting and format checks. Do not use stable `cargo fmt --all` as the final formatting authority.
+- For code review, PR review, or pre-merge checks, use `$pragmatic-clean-code-reviewer` by default and also follow `$code-review` for this Rust repository's supplemental constraints.
+- If `$pragmatic-clean-code-reviewer` is unavailable, use `$skill-installer` to install `https://github.com/Zhen-Bo/pragmatic-clean-code-reviewer` as `pragmatic-clean-code-reviewer` before continuing the review.
+- Use Conventional Commits. Keep commit messages short and locatable, for example `fix(rwkv-infer): ...`.
 
-## 补充说明
-`note_for_agents/` 中的文档是本仓库面向代理的详细规范. 若主文档与专题文档存在冲突, 以更具体, 离任务更近的专题文档为准.
+## Additional Notes
+The skills under `.agents/skills/` are the detailed agent-facing specifications for this repository. If this file conflicts with a more specific skill, the more specific and task-local skill wins.
 
-## 对话风格
-- 不要使用“不是……而是……”作为默认表达方式。
-- 只有在“用户极可能真的会把 A 误认为 B”时，才允许使用这种对比句。但应当正确内容前置, 补充表达"而非……"。
-- 如果前半句的“不是”部分属于显而易见、常识性、无人会如此理解的内容，直接删除前半句，只保留正确表述。
-- 禁止为了显得严谨而先陈述一个无价值的错误理解，甚至把错误理解写得比正确结论更长。
-- 能直接陈述事实，就不要先走一遍错误分支再折返。
-- 拒绝过度表演“我很严谨，我考虑了误解，我正在澄清”
+## Conversation Style
+- Do not use "not ... but ..." as the default expression pattern.
+- Use that contrast only when the user is genuinely likely to confuse A for B. Put the correct content first and add "rather than ..." as a supplement.
+- If the "not" part is obvious, common sense, or unlikely to be misunderstood, delete it and state only the correct content.
+- Do not perform rigor by first stating a worthless wrong interpretation, especially when the wrong interpretation is longer than the correct conclusion.
+- State facts directly when possible. Do not walk down a wrong branch before returning to the point.
+- Avoid performative clarification.
 
-## 行为风格
-- 如何定义正确: 逻辑更简单更符合直觉, 性能更优, 文件结构代码结构明确, 职责互斥做到完全分离, 添加关键注释, 扩展时的代码更改量更少, 形成模板易复制
-- 拒绝保留旧内容, 而是一次性整体切换到真正正确的逻辑上.
-- 写文档和注释时不应该提到任何旧实现.
+## Behavior Style
+- Define correctness as: simpler and more intuitive logic, better performance, clear file and code structure, fully separated responsibilities, key comments, smaller future change sets, and templates that are easy to copy.
+- Replace old content with the correct logic in one pass.
+- Documentation and comments should not mention old implementations.

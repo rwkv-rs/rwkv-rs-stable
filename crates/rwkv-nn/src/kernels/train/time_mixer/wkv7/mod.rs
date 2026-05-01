@@ -259,12 +259,12 @@ mod tests {
             wkv7_statetune_custom,
             wkv7_statetune_reference,
         },
-        test_utils::backend::{TestAutodiffBackend, TestBackend},
+        test_utils::backend::{TestAutodiffBackend, TestAutodiffDevice, TestBackend, TestDevice},
     };
 
     #[test]
     fn forward() {
-        let device: <TestBackend as burn::tensor::backend::Backend>::Device = Default::default();
+        let device: TestDevice = Default::default();
         let inputs = random_sequence::<TestBackend>([2, 16, 2, 8], &device);
         let initial_state =
             Tensor::<TestBackend, 4>::random([2, 2, 8, 8], Distribution::Default, &device);
@@ -293,8 +293,7 @@ mod tests {
 
     #[test]
     fn backward() {
-        let device: <TestAutodiffBackend as burn::tensor::backend::Backend>::Device =
-            Default::default();
+        let device: TestAutodiffDevice = Default::default();
         let inputs = random_sequence::<TestAutodiffBackend>([1, 16, 1, 4], &device).require_grad();
 
         let reference = wkv7_pretrain_reference(inputs.clone().into_inputs()).sum();
@@ -330,7 +329,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn forward_panics_on_wrong_context_len() {
-        let device: <TestBackend as burn::tensor::backend::Backend>::Device = Default::default();
+        let device: TestDevice = Default::default();
         let inputs = random_sequence::<TestBackend>([1, 15, 1, 4], &device);
 
         let _ = wkv7_pretrain_custom(inputs.into_inputs());

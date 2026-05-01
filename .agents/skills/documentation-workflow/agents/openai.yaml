@@ -1,0 +1,4 @@
+interface:
+  display_name: "Documentation Workflow"
+  short_description: "Rustdoc and book update guidance"
+  default_prompt: "Use $documentation-workflow to update comments or docs correctly."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Development Workflow"
+  short_description: "Build, test, benchmark, and doc commands"
+  default_prompt: "Use $development-workflow to choose the right workspace command."

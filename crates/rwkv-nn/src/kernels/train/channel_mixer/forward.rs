@@ -14,16 +14,7 @@ use burn_cubecl::{
         calculate_cube_count_elemwise,
         prelude::*,
         tensor_vector_size_parallel,
-        tune::{
-            AsFunctionTunable,
-            AutotuneKey,
-            LocalTuner,
-            Tunable,
-            TunableSet,
-            TuneGroup,
-            anchor,
-            local_tuner,
-        },
+        tune::{AutotuneKey, LocalTuner, Tunable, TunableSet, TuneGroup, anchor, local_tuner},
     },
     element::BoolElement,
     ops::numeric::empty_device,
@@ -195,7 +186,7 @@ where
 {
     let client = embedded_context.client.clone();
 
-    let key = |embedded_context: &CubeTensor<R>, key_scale: &CubeTensor<R>| {
+    let key = |(embedded_context, key_scale): &(CubeTensor<R>, CubeTensor<R>)| {
         let shape = embedded_context.meta.shape();
 
         ChannelMixerElementwiseAutotuneKey {
@@ -208,8 +199,9 @@ where
 
     let input_gen =
         |_key: &ChannelMixerElementwiseAutotuneKey,
-         embedded_context: &CubeTensor<R>,
-         key_scale: &CubeTensor<R>| { (embedded_context.copy(), key_scale.copy()) };
+         (embedded_context, key_scale): &(CubeTensor<R>, CubeTensor<R>)| {
+            (embedded_context.copy(), key_scale.copy())
+        };
 
     static TUNER: LocalTuner<ChannelMixerElementwiseAutotuneKey, CubeTuneId> =
         local_tuner!("channel-mixer-mix-forward");
@@ -222,15 +214,14 @@ where
         for line_size in LINE_SIZE_CANDIDATES {
             set = set.with(
                 Tunable::new(
-                    format!("line_size_{line_size}"),
-                    (move |embedded_context: CubeTensor<R>, key_scale: CubeTensor<R>| {
-                        channel_mixer_mix_with_vector::<R, F>(
+                    &format!("line_size_{line_size}"),
+                    move |(embedded_context, key_scale)| {
+                        Ok::<_, String>(channel_mixer_mix_with_vector::<R, F>(
                             embedded_context,
                             key_scale,
                             line_size,
-                        )
-                    })
-                    .ok(),
+                        ))
+                    },
                 )
                 .group(&line_size_group, move |key| {
                     if line_size <= key.max_line_size && key.innermost_dim.is_multiple_of(line_size)
@@ -335,13 +326,12 @@ where
 
         for line_size in LINE_SIZE_CANDIDATES {
             set = set.with(
-                Tunable::new(
-                    format!("line_size_{line_size}"),
-                    (move |pre_activation: CubeTensor<R>| {
-                        channel_mixer_relu_square_with_vector::<R, F>(pre_activation, line_size)
-                    })
-                    .ok(),
-                )
+                Tunable::new(&format!("line_size_{line_size}"), move |pre_activation| {
+                    Ok::<_, String>(channel_mixer_relu_square_with_vector::<R, F>(
+                        pre_activation,
+                        line_size,
+                    ))
+                })
                 .group(&line_size_group, move |key| {
                     if line_size <= key.max_line_size && key.innermost_dim.is_multiple_of(line_size)
                     {

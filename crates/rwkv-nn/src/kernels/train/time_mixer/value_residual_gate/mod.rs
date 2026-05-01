@@ -129,12 +129,12 @@ mod tests {
             value_residual_gate_custom,
             value_residual_gate_reference,
         },
-        test_utils::backend::{TestAutodiffBackend, TestBackend},
+        test_utils::backend::{TestAutodiffBackend, TestAutodiffDevice, TestBackend, TestDevice},
     };
 
     #[test]
     fn forward() {
-        let device: <TestBackend as burn::tensor::backend::Backend>::Device = Default::default();
+        let device: TestDevice = Default::default();
 
         for shape in [[2, 8, 32], [1, 3, 17]] {
             let value = Tensor::<TestBackend, 3>::random(shape, Distribution::Default, &device);
@@ -164,8 +164,7 @@ mod tests {
 
     #[test]
     fn backward() {
-        let device: <TestAutodiffBackend as burn::tensor::backend::Backend>::Device =
-            Default::default();
+        let device: TestAutodiffDevice = Default::default();
 
         for shape in [[2, 8, 32], [1, 3, 17]] {
             let value =

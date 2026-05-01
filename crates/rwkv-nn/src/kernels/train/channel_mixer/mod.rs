@@ -154,12 +154,12 @@ mod tests {
             channel_mixer_reference,
             io::ChannelMixerForwardInputs,
         },
-        test_utils::backend::{TestAutodiffBackend, TestBackend},
+        test_utils::backend::{TestAutodiffBackend, TestAutodiffDevice, TestBackend, TestDevice},
     };
 
     #[test]
     fn forward() {
-        let device: <TestBackend as burn::tensor::backend::Backend>::Device = Default::default();
+        let device: TestDevice = Default::default();
 
         for shape in [[2, 8, 32], [1, 3, 17], [2, 0, 32]] {
             let inputs = random_inputs::<TestBackend>(shape[0], shape[1], shape[2], &device);
@@ -179,8 +179,7 @@ mod tests {
 
     #[test]
     fn backward() {
-        let device: <TestAutodiffBackend as burn::tensor::backend::Backend>::Device =
-            Default::default();
+        let device: TestAutodiffDevice = Default::default();
 
         for shape in [[2, 8, 32], [1, 3, 17], [2, 1, 32]] {
             assert_backward_close(shape[0], shape[1], shape[2], &device);
@@ -191,7 +190,7 @@ mod tests {
         batch_size: usize,
         context_len: usize,
         embedded_dim: usize,
-        device: &<TestAutodiffBackend as burn::tensor::backend::Backend>::Device,
+        device: &TestAutodiffDevice,
     ) {
         let base_inputs =
             random_inputs::<TestAutodiffBackend>(batch_size, context_len, embedded_dim, device);
@@ -211,7 +210,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "ShapeMismatch")]
     fn rejects_wrong_key_scale_shape() {
-        let device: <TestBackend as burn::tensor::backend::Backend>::Device = Default::default();
+        let device: TestDevice = Default::default();
         let mut inputs = random_inputs::<TestBackend>(2, 8, 32, &device);
         inputs.key_scale = Tensor::<TestBackend, 1>::random([31], Distribution::Default, &device);
 
@@ -221,7 +220,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "AxisMismatch")]
     fn rejects_wrong_key_weight_shape() {
-        let device: <TestBackend as burn::tensor::backend::Backend>::Device = Default::default();
+        let device: TestDevice = Default::default();
         let mut inputs = random_inputs::<TestBackend>(2, 8, 32, &device);
         inputs.key_weight =
             Tensor::<TestBackend, 2>::random([128, 31], Distribution::Default, &device);
@@ -232,7 +231,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "AxisMismatch")]
     fn rejects_wrong_value_weight_shape() {
-        let device: <TestBackend as burn::tensor::backend::Backend>::Device = Default::default();
+        let device: TestDevice = Default::default();
         let mut inputs = random_inputs::<TestBackend>(2, 8, 32, &device);
         inputs.value_weight =
             Tensor::<TestBackend, 2>::random([32, 127], Distribution::Default, &device);

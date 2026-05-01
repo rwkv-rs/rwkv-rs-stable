@@ -10,16 +10,7 @@ use burn_cubecl::{
         calculate_cube_count_elemwise,
         prelude::*,
         tensor_vector_size_parallel,
-        tune::{
-            AsFunctionTunable,
-            AutotuneKey,
-            LocalTuner,
-            Tunable,
-            TunableSet,
-            TuneGroup,
-            anchor,
-            local_tuner,
-        },
+        tune::{AutotuneKey, LocalTuner, Tunable, TunableSet, TuneGroup, anchor, local_tuner},
     },
     element::BoolElement,
     ops::numeric::empty_device,
@@ -70,10 +61,12 @@ pub(crate) fn fused_value_residual_gate<
     } = inputs;
     let client = value.client.clone();
 
-    let key = |value: &CubeTensor<R>,
-               value_from_first_cell: &CubeTensor<R>,
-               gate_base: &CubeTensor<R>,
-               gate_input: &CubeTensor<R>| {
+    let key = |(value, value_from_first_cell, gate_base, gate_input): &(
+        CubeTensor<R>,
+        CubeTensor<R>,
+        CubeTensor<R>,
+        CubeTensor<R>,
+    )| {
         let shape = value.meta.shape();
 
         ValueResidualGateForwardAutotuneKey {
@@ -88,10 +81,12 @@ pub(crate) fn fused_value_residual_gate<
     };
 
     let input_gen = |_key: &ValueResidualGateForwardAutotuneKey,
-                     value: &CubeTensor<R>,
-                     value_from_first_cell: &CubeTensor<R>,
-                     gate_base: &CubeTensor<R>,
-                     gate_input: &CubeTensor<R>| {
+                     (value, value_from_first_cell, gate_base, gate_input): &(
+        CubeTensor<R>,
+        CubeTensor<R>,
+        CubeTensor<R>,
+        CubeTensor<R>,
+    )| {
         (
             value.copy(),
             value_from_first_cell.copy(),
@@ -111,20 +106,16 @@ pub(crate) fn fused_value_residual_gate<
         for line_size in LINE_SIZE_CANDIDATES {
             set = set.with(
                 Tunable::new(
-                    format!("line_size_{line_size}"),
-                    (move |value: CubeTensor<R>,
-                           value_from_first_cell: CubeTensor<R>,
-                           gate_base: CubeTensor<R>,
-                           gate_input: CubeTensor<R>| {
-                        value_residual_gate::<R, F>(
+                    &format!("line_size_{line_size}"),
+                    move |(value, value_from_first_cell, gate_base, gate_input)| {
+                        Ok::<_, String>(value_residual_gate::<R, F>(
                             value,
                             value_from_first_cell,
                             gate_base,
                             gate_input,
                             line_size,
-                        )
-                    })
-                    .ok(),
+                        ))
+                    },
                 )
                 .group(&line_size_group, move |key| {
                     if line_size <= key.max_line_size && key.embedded_dim.is_multiple_of(line_size)

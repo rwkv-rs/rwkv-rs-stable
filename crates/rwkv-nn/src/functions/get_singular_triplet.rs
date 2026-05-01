@@ -5,6 +5,11 @@ use burn::{
 
 use crate::functions::normalize::normalize;
 
+/// Estimates the dominant singular value and vectors by power iteration.
+///
+/// # Panics
+///
+/// Panics when called for a tensor rank other than two.
 pub fn get_singular_triplet<B: Backend, const D: usize>(
     w: Tensor<B, D>,
     u_state: Option<Tensor<B, D>>,

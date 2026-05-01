@@ -1,3 +1,5 @@
+//! Workspace automation binary for rwkv-rs.
+
 mod commands;
 
 use anyhow::Result;
@@ -21,9 +23,13 @@ use crate::commands::{
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, ValueEnum)]
+/// Build context selected for commands that support std/no-std variants.
 pub enum Context {
+    /// Run commands for the standard-library context.
     Std,
+    /// Run commands for the no-std context.
     NoStd,
+    /// Run commands for every supported context.
     All,
 }
 

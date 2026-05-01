@@ -120,12 +120,12 @@ mod tests {
             learning_rate_gate_custom,
             learning_rate_gate_reference,
         },
-        test_utils::backend::{TestAutodiffBackend, TestBackend},
+        test_utils::backend::{TestAutodiffBackend, TestAutodiffDevice, TestBackend, TestDevice},
     };
 
     #[test]
     fn forward() {
-        let device: <TestBackend as burn::tensor::backend::Backend>::Device = Default::default();
+        let device: TestDevice = Default::default();
 
         for shape in [[2, 8, 32], [1, 3, 17]] {
             let learning_rate_base =
@@ -150,8 +150,7 @@ mod tests {
 
     #[test]
     fn backward() {
-        let device: <TestAutodiffBackend as burn::tensor::backend::Backend>::Device =
-            Default::default();
+        let device: TestAutodiffDevice = Default::default();
 
         let learning_rate_base =
             Tensor::<TestAutodiffBackend, 1>::random([32], Distribution::Default, &device)

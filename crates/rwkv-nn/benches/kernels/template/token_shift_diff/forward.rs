@@ -6,28 +6,31 @@ use burn::{
     prelude::{Backend, Int},
     tensor::{Distribution, Tensor, TensorData},
 };
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion};
 use rwkv_nn::kernels::template::token_shift_diff::{
     io::TokenShiftDiffForwardInputs,
     token_shift_diff_custom,
     token_shift_diff_reference,
 };
 
-use crate::common::{CONTEXT_LEN, EMBEDDED_DIM};
+use crate::common;
 
-#[path = "../../../mod.rs"]
-mod common;
+type B = crate::common::BenchBackend;
 
-type B = common::BenchBackend;
-
-fn forward(c: &mut Criterion) {
-    let device = common::device::<B>();
+pub(crate) fn forward(c: &mut Criterion) {
+    let device = crate::common::device::<B>();
     let mut group = c.benchmark_group("rwkv-nn/kernels/token_shift_diff/forward");
 
     for (name, batch_size, context_len, embedded_dim, full_batch_size) in [
         ("single_token", 4, 1, 512, 9),
         ("small_prefill", 4, 16, 512, 9),
-        ("infer_prefill", 8, CONTEXT_LEN, EMBEDDED_DIM, 17),
+        (
+            "infer_prefill",
+            8,
+            crate::common::CONTEXT_LEN,
+            crate::common::EMBEDDED_DIM,
+            17,
+        ),
     ] {
         let inputs = make_inputs::<B>(
             batch_size,
@@ -95,6 +98,3 @@ where
         batch_ids: Tensor::<B, 1, Int>::from_ints(TensorData::new(ids, [batch_size]), device),
     }
 }
-
-criterion_group!(benches, forward);
-criterion_main!(benches);

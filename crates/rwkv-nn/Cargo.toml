@@ -9,6 +9,7 @@ documentation = "https://docs.rs/rwkv"
 repository = "https://github.com/rwkv-rs/rwkv-rs"
 
 rust-version = "1.95"
+autobenches = false
 
 edition.workspace = true
 license.workspace = true
@@ -19,24 +20,8 @@ version.workspace = true
 bench = false
 
 [[bench]]
-name = "addcmul_forward"
+name = "kernels"
 harness = false
-path = "benches/kernels/template/addcmul/forward.rs"
-
-[[bench]]
-name = "addcmul_backward"
-harness = false
-path = "benches/kernels/template/addcmul/backward.rs"
-
-[[bench]]
-name = "token_shift_diff_forward"
-harness = false
-path = "benches/kernels/template/token_shift_diff/forward.rs"
-
-[[bench]]
-name = "token_shift_diff_backward"
-harness = false
-path = "benches/kernels/template/token_shift_diff/backward.rs"
 
 
 [features]

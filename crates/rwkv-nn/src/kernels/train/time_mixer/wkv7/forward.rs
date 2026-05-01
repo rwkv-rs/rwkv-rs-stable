@@ -10,16 +10,7 @@ use burn_cubecl::{
         CubeCount,
         CubeDim,
         prelude::*,
-        tune::{
-            AsFunctionTunable,
-            AutotuneKey,
-            LocalTuner,
-            Tunable,
-            TunableSet,
-            TuneGroup,
-            anchor,
-            local_tuner,
-        },
+        tune::{AutotuneKey, LocalTuner, Tunable, TunableSet, TuneGroup, anchor, local_tuner},
     },
     element::BoolElement,
     ops::numeric::empty_device,
@@ -84,12 +75,21 @@ pub(crate) fn fused_wkv7_pretrain<
     let client = receptance.client.clone();
 
     let key_chunk_len = chunk_len;
-    let key = move |receptance: &CubeTensor<R>,
-                    _weight_decay: &CubeTensor<R>,
-                    _replacement_key: &CubeTensor<R>,
-                    _value: &CubeTensor<R>,
-                    _removal_key_normalized: &CubeTensor<R>,
-                    _replacement: &CubeTensor<R>| {
+    let key = move |(
+        receptance,
+        _weight_decay,
+        _replacement_key,
+        _value,
+        _removal_key_normalized,
+        _replacement,
+    ): &(
+        CubeTensor<R>,
+        CubeTensor<R>,
+        CubeTensor<R>,
+        CubeTensor<R>,
+        CubeTensor<R>,
+        CubeTensor<R>,
+    )| {
         let shape = receptance.meta.shape();
         Wkv7ForwardAutotuneKey {
             op: Wkv7ForwardOp::Pretrain,
@@ -101,12 +101,21 @@ pub(crate) fn fused_wkv7_pretrain<
         }
     };
     let input_gen = |_key: &Wkv7ForwardAutotuneKey,
-                     receptance: &CubeTensor<R>,
-                     weight_decay: &CubeTensor<R>,
-                     replacement_key: &CubeTensor<R>,
-                     value: &CubeTensor<R>,
-                     removal_key_normalized: &CubeTensor<R>,
-                     replacement: &CubeTensor<R>| {
+                     (
+        receptance,
+        weight_decay,
+        replacement_key,
+        value,
+        removal_key_normalized,
+        replacement,
+    ): &(
+        CubeTensor<R>,
+        CubeTensor<R>,
+        CubeTensor<R>,
+        CubeTensor<R>,
+        CubeTensor<R>,
+        CubeTensor<R>,
+    )| {
         (
             receptance.copy(),
             weight_decay.copy(),
@@ -130,28 +139,31 @@ pub(crate) fn fused_wkv7_pretrain<
         ] {
             set = set.with(
                 Tunable::new(
-                    format!("{variant:?}"),
-                    (move |receptance: CubeTensor<R>,
-                           weight_decay: CubeTensor<R>,
-                           replacement_key: CubeTensor<R>,
-                           value: CubeTensor<R>,
-                           removal_key_normalized: CubeTensor<R>,
-                           replacement: CubeTensor<R>| {
-                        wkv7_pretrain::<R, F>(
-                            Wkv7PretrainLaunchInputs {
-                                receptance,
-                                weight_decay,
-                                replacement_key,
-                                value,
-                                removal_key_normalized,
-                                replacement,
-                                chunk_len,
-                            },
-                            variant,
+                    &format!("{variant:?}"),
+                    move |(
+                        receptance,
+                        weight_decay,
+                        replacement_key,
+                        value,
+                        removal_key_normalized,
+                        replacement,
+                    )| {
+                        Ok::<_, String>(
+                            wkv7_pretrain::<R, F>(
+                                Wkv7PretrainLaunchInputs {
+                                    receptance,
+                                    weight_decay,
+                                    replacement_key,
+                                    value,
+                                    removal_key_normalized,
+                                    replacement,
+                                    chunk_len,
+                                },
+                                variant,
+                            )
+                            .output,
                         )
-                        .output
-                    })
-                    .ok(),
+                    },
                 )
                 .group(&variant_group, |_| 1),
             );

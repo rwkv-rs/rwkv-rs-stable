@@ -87,7 +87,6 @@ mod cube_impl {
             prelude::*,
             tensor_vector_size_parallel,
             tune::{
-                AsFunctionTunable,
                 AutotuneKey,
                 AutotuneOutput,
                 LocalTuner,
@@ -437,9 +436,11 @@ mod cube_impl {
     ) -> ChannelMixerMixBackwardOutputs<CubeBackend<R, F, I, BT>> {
         let client = mixed_grad.client.clone();
 
-        let key = |mixed_grad: &CubeTensor<R>,
-                   embedded_context: &CubeTensor<R>,
-                   key_scale: &CubeTensor<R>| {
+        let key = |(mixed_grad, embedded_context, key_scale): &(
+            CubeTensor<R>,
+            CubeTensor<R>,
+            CubeTensor<R>,
+        )| {
             let shape = mixed_grad.meta.shape();
 
             ChannelMixerMixBackwardAutotuneKey {
@@ -454,12 +455,13 @@ mod cube_impl {
             }
         };
 
-        let input_gen = |_key: &ChannelMixerMixBackwardAutotuneKey,
-                         mixed_grad: &CubeTensor<R>,
-                         embedded_context: &CubeTensor<R>,
-                         key_scale: &CubeTensor<R>| {
-            (mixed_grad.copy(), embedded_context.copy(), key_scale.copy())
-        };
+        let input_gen =
+            |_key: &ChannelMixerMixBackwardAutotuneKey,
+             (mixed_grad, embedded_context, key_scale): &(
+                CubeTensor<R>,
+                CubeTensor<R>,
+                CubeTensor<R>,
+            )| { (mixed_grad.copy(), embedded_context.copy(), key_scale.copy()) };
 
         static TUNER: LocalTuner<ChannelMixerMixBackwardAutotuneKey, CubeTuneId> =
             local_tuner!("channel-mixer-mix-backward");
@@ -476,10 +478,13 @@ mod cube_impl {
                     for bt_tile in KEY_SCALE_REDUCE_BT_TILE_CANDIDATES {
                         set = set.with(
                             Tunable::new(
-                                format!("line_{line_size}_block_{block_size}_bt_{bt_tile}"),
-                                (move |mixed_grad: CubeTensor<R>,
-                                       embedded_context: CubeTensor<R>,
-                                       key_scale: CubeTensor<R>| {
+                                &format!("line_{line_size}_block_{block_size}_bt_{bt_tile}"),
+                                move |(mixed_grad, embedded_context, key_scale): (
+                                    CubeTensor<R>,
+                                    CubeTensor<R>,
+                                    CubeTensor<R>,
+                                )| {
+                                    Ok::<_, String>({
                                     let shape = mixed_grad.meta.shape().clone();
                                     let [batch_size, context_len, embedded_dim] = shape.dims();
                                     let bt_len = batch_size * context_len;
@@ -584,8 +589,8 @@ mod cube_impl {
                                         embedded_context_grad,
                                         key_scale_grad,
                                     }
-                                })
-                                .ok(),
+                                    })
+                                },
                             )
                             .group(&launch_group, move |key| {
                                 if line_size <= key.max_line_size

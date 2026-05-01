@@ -1,0 +1,31 @@
+[package]
+name = "rwkv-config"
+authors = ["caizus <18930215187@163.com>"]
+
+description = "Shared configuration schemas, builders, and OnceCell registries for rwkv-rs"
+documentation = "https://docs.rs/rwkv"
+repository = "https://github.com/rwkv-rs/rwkv-rs"
+
+rust-version = "1.95"
+
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+version.workspace = true
+
+[features]
+default = []
+model = ["dep:once_cell", "dep:rwkv-derive"]
+train = ["dep:once_cell", "dep:rwkv-derive"]
+infer = ["dep:once_cell", "dep:rwkv-derive"]
+eval = ["dep:once_cell", "dep:rwkv-derive"]
+
+[lints]
+workspace = true
+
+[dependencies]
+once_cell = { workspace = true, optional = true }
+serde = { workspace = true }
+toml = { workspace = true }
+
+rwkv-derive = { path = "../rwkv-derive", optional = true }

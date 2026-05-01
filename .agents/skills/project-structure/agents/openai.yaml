@@ -1,0 +1,4 @@
+interface:
+  display_name: "Project Structure"
+  short_description: "Repository layout and crate responsibilities"
+  default_prompt: "Use $project-structure to decide where a repository change belongs."

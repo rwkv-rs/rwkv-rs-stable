@@ -1,0 +1,4 @@
+interface:
+  display_name: "Commit and PR"
+  short_description: "Commit messages and PR requirements"
+  default_prompt: "Use $commit-and-pr to prepare a commit or PR summary."

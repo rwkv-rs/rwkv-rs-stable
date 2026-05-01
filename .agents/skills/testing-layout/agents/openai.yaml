@@ -1,0 +1,4 @@
+interface:
+  display_name: "Testing Layout"
+  short_description: "Test and benchmark placement conventions"
+  default_prompt: "Use $testing-layout to place tests or benchmarks correctly."

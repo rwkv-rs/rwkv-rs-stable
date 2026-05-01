@@ -186,12 +186,12 @@ mod tests {
             mix6_custom,
             mix6_reference,
         },
-        test_utils::backend::{TestAutodiffBackend, TestBackend},
+        test_utils::backend::{TestAutodiffBackend, TestAutodiffDevice, TestBackend, TestDevice},
     };
 
     #[test]
     fn forward() {
-        let device: <TestBackend as burn::tensor::backend::Backend>::Device = Default::default();
+        let device: TestDevice = Default::default();
 
         for shape in [[2, 8, 32], [1, 3, 17]] {
             let inputs = random_inputs::<TestBackend>(shape, &device);
@@ -205,8 +205,7 @@ mod tests {
 
     #[test]
     fn backward() {
-        let device: <TestAutodiffBackend as burn::tensor::backend::Backend>::Device =
-            Default::default();
+        let device: TestAutodiffDevice = Default::default();
 
         for shape in [[2, 8, 32], [1, 3, 17]] {
             for branch_index in 0..6 {
@@ -249,7 +248,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn forward_panics_on_wrong_scale_shape() {
-        let device: <TestBackend as burn::tensor::backend::Backend>::Device = Default::default();
+        let device: TestDevice = Default::default();
         let mut inputs = random_inputs::<TestBackend>([2, 4, 8], &device);
         inputs.gate_scale =
             Tensor::<TestBackend, 3>::random([1, 1, 7], Distribution::Default, &device);

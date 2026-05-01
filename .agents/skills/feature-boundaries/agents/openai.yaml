@@ -1,0 +1,4 @@
+interface:
+  display_name: "Feature Boundaries"
+  short_description: "Cargo feature ownership rules"
+  default_prompt: "Use $feature-boundaries to decide where Cargo features and cfg gates belong."

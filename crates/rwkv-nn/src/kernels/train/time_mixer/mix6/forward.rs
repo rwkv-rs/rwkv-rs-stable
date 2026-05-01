@@ -11,7 +11,6 @@ use burn_cubecl::{
         prelude::*,
         tensor_vector_size_parallel,
         tune::{
-            AsFunctionTunable,
             AutotuneKey,
             AutotuneOutput,
             LocalTuner,
@@ -93,13 +92,23 @@ pub(crate) fn fused_mix6<
     } = inputs;
     let client = embedded_context.client.clone();
 
-    let key = |embedded_context: &CubeTensor<R>,
-               receptance_scale: &CubeTensor<R>,
-               weight_decay_scale: &CubeTensor<R>,
-               key_scale: &CubeTensor<R>,
-               value_scale: &CubeTensor<R>,
-               learning_rate_scale: &CubeTensor<R>,
-               gate_scale: &CubeTensor<R>| {
+    let key = |(
+        embedded_context,
+        receptance_scale,
+        weight_decay_scale,
+        key_scale,
+        value_scale,
+        learning_rate_scale,
+        gate_scale,
+    ): &(
+        CubeTensor<R>,
+        CubeTensor<R>,
+        CubeTensor<R>,
+        CubeTensor<R>,
+        CubeTensor<R>,
+        CubeTensor<R>,
+        CubeTensor<R>,
+    )| {
         let shape = embedded_context.meta.shape();
 
         Mix6ForwardAutotuneKey {
@@ -123,13 +132,23 @@ pub(crate) fn fused_mix6<
     };
 
     let input_gen = |_key: &Mix6ForwardAutotuneKey,
-                     embedded_context: &CubeTensor<R>,
-                     receptance_scale: &CubeTensor<R>,
-                     weight_decay_scale: &CubeTensor<R>,
-                     key_scale: &CubeTensor<R>,
-                     value_scale: &CubeTensor<R>,
-                     learning_rate_scale: &CubeTensor<R>,
-                     gate_scale: &CubeTensor<R>| {
+                     (
+        embedded_context,
+        receptance_scale,
+        weight_decay_scale,
+        key_scale,
+        value_scale,
+        learning_rate_scale,
+        gate_scale,
+    ): &(
+        CubeTensor<R>,
+        CubeTensor<R>,
+        CubeTensor<R>,
+        CubeTensor<R>,
+        CubeTensor<R>,
+        CubeTensor<R>,
+        CubeTensor<R>,
+    )| {
         (
             embedded_context.copy(),
             receptance_scale.copy(),
@@ -151,15 +170,17 @@ pub(crate) fn fused_mix6<
         for line_size in LINE_SIZE_CANDIDATES {
             set = set.with(
                 Tunable::new(
-                    format!("line_size_{line_size}"),
-                    (move |embedded_context: CubeTensor<R>,
-                           receptance_scale: CubeTensor<R>,
-                           weight_decay_scale: CubeTensor<R>,
-                           key_scale: CubeTensor<R>,
-                           value_scale: CubeTensor<R>,
-                           learning_rate_scale: CubeTensor<R>,
-                           gate_scale: CubeTensor<R>| {
-                        mix6::<R, F, I, BT>(
+                    &format!("line_size_{line_size}"),
+                    move |(
+                        embedded_context,
+                        receptance_scale,
+                        weight_decay_scale,
+                        key_scale,
+                        value_scale,
+                        learning_rate_scale,
+                        gate_scale,
+                    )| {
+                        Ok::<_, String>(mix6::<R, F, I, BT>(
                             embedded_context,
                             receptance_scale,
                             weight_decay_scale,
@@ -168,9 +189,8 @@ pub(crate) fn fused_mix6<
                             learning_rate_scale,
                             gate_scale,
                             line_size,
-                        )
-                    })
-                    .ok(),
+                        ))
+                    },
                 )
                 .group(&line_size_group, move |key| {
                     if line_size <= key.max_line_size && key.embedded_dim.is_multiple_of(line_size)

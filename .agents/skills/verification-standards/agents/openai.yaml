@@ -1,0 +1,4 @@
+interface:
+  display_name: "Verification Standards"
+  short_description: "Risk-based validation requirements"
+  default_prompt: "Use $verification-standards to pick acceptance checks for a change."

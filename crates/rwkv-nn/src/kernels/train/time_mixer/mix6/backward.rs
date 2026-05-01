@@ -97,7 +97,6 @@ mod cube_impl {
             prelude::*,
             tensor_vector_size_parallel,
             tune::{
-                AsFunctionTunable,
                 AutotuneKey,
                 AutotuneOutput,
                 LocalTuner,
@@ -533,14 +532,25 @@ mod cube_impl {
         assert!(gate_scale.is_contiguous(), "gate_scale must be contiguous");
 
         let client = embedded_context.client.clone();
-        let key = |output_grad: &CubeTensor<R>,
-                   embedded_context: &CubeTensor<R>,
-                   receptance_scale: &CubeTensor<R>,
-                   weight_decay_scale: &CubeTensor<R>,
-                   key_scale: &CubeTensor<R>,
-                   value_scale: &CubeTensor<R>,
-                   learning_rate_scale: &CubeTensor<R>,
-                   gate_scale: &CubeTensor<R>| {
+        let key = |(
+            output_grad,
+            embedded_context,
+            receptance_scale,
+            weight_decay_scale,
+            key_scale,
+            value_scale,
+            learning_rate_scale,
+            gate_scale,
+        ): &(
+            CubeTensor<R>,
+            CubeTensor<R>,
+            CubeTensor<R>,
+            CubeTensor<R>,
+            CubeTensor<R>,
+            CubeTensor<R>,
+            CubeTensor<R>,
+            CubeTensor<R>,
+        )| {
             let shape = embedded_context.meta.shape();
 
             Mix6BackwardAutotuneKey {
@@ -564,14 +574,25 @@ mod cube_impl {
         };
 
         let input_gen = |_key: &Mix6BackwardAutotuneKey,
-                         output_grad: &CubeTensor<R>,
-                         embedded_context: &CubeTensor<R>,
-                         receptance_scale: &CubeTensor<R>,
-                         weight_decay_scale: &CubeTensor<R>,
-                         key_scale: &CubeTensor<R>,
-                         value_scale: &CubeTensor<R>,
-                         learning_rate_scale: &CubeTensor<R>,
-                         gate_scale: &CubeTensor<R>| {
+                         (
+            output_grad,
+            embedded_context,
+            receptance_scale,
+            weight_decay_scale,
+            key_scale,
+            value_scale,
+            learning_rate_scale,
+            gate_scale,
+        ): &(
+            CubeTensor<R>,
+            CubeTensor<R>,
+            CubeTensor<R>,
+            CubeTensor<R>,
+            CubeTensor<R>,
+            CubeTensor<R>,
+            CubeTensor<R>,
+            CubeTensor<R>,
+        )| {
             (
                 output_grad.copy(),
                 embedded_context.copy(),
@@ -587,25 +608,38 @@ mod cube_impl {
         static TUNER: LocalTuner<Mix6BackwardAutotuneKey, CubeTuneId> =
             local_tuner!("rwkv7-time-mixer-mix6-backward");
 
-        let tunables = TUNER.init(move || {
-            let launch_group =
-                TuneGroup::<Mix6BackwardAutotuneKey>::new("line_size_reduce_tile", |_| 1);
-            let mut set = TunableSet::new(key, input_gen);
+        let tunables =
+            TUNER.init(move || {
+                let launch_group =
+                    TuneGroup::<Mix6BackwardAutotuneKey>::new("line_size_reduce_tile", |_| 1);
+                let mut set = TunableSet::new(key, input_gen);
 
-            for line_size in LINE_SIZE_CANDIDATES {
-                for block_size in REDUCE_BLOCK_SIZE_CANDIDATES {
-                    for bt_tile in BT_TILE_CANDIDATES {
-                        set = set.with(
+                for line_size in LINE_SIZE_CANDIDATES {
+                    for block_size in REDUCE_BLOCK_SIZE_CANDIDATES {
+                        for bt_tile in BT_TILE_CANDIDATES {
+                            set = set.with(
                             Tunable::new(
-                                format!("line_{line_size}_block_{block_size}_bt_{bt_tile}"),
-                                (move |output_grad: CubeTensor<R>,
-                                       embedded_context: CubeTensor<R>,
-                                       receptance_scale: CubeTensor<R>,
-                                       weight_decay_scale: CubeTensor<R>,
-                                       key_scale: CubeTensor<R>,
-                                       value_scale: CubeTensor<R>,
-                                       learning_rate_scale: CubeTensor<R>,
-                                       gate_scale: CubeTensor<R>| {
+                                &format!("line_{line_size}_block_{block_size}_bt_{bt_tile}"),
+                                move |(
+                                    output_grad,
+                                    embedded_context,
+                                    receptance_scale,
+                                    weight_decay_scale,
+                                    key_scale,
+                                    value_scale,
+                                    learning_rate_scale,
+                                    gate_scale,
+                                ): (
+                                    CubeTensor<R>,
+                                    CubeTensor<R>,
+                                    CubeTensor<R>,
+                                    CubeTensor<R>,
+                                    CubeTensor<R>,
+                                    CubeTensor<R>,
+                                    CubeTensor<R>,
+                                    CubeTensor<R>,
+                                )| {
+                                    Ok::<_, String>({
                                     let shape = embedded_context.meta.shape().clone();
                                     let [batch_size, context_len, embedded_dim] = shape.dims();
                                     let bt_len = batch_size * context_len;
@@ -866,8 +900,8 @@ mod cube_impl {
                                         learning_rate_scale_grad,
                                         gate_scale_grad,
                                     }
-                                })
-                                .ok(),
+                                    })
+                                },
                             )
                             .group(&launch_group, move |key| {
                                 if line_size <= key.max_line_size
@@ -879,12 +913,12 @@ mod cube_impl {
                                 }
                             }),
                         );
+                        }
                     }
                 }
-            }
 
-            set
-        });
+                set
+            });
 
         TUNER.execute(
             &CubeTuneId::new(&embedded_context.client, &embedded_context.device),

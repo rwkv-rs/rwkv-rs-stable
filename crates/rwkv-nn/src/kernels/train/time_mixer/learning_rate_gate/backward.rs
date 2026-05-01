@@ -21,7 +21,6 @@ use burn_cubecl::{
         prelude::*,
         tensor_vector_size_parallel,
         tune::{
-            AsFunctionTunable,
             AutotuneKey,
             AutotuneOutput,
             LocalTuner,
@@ -96,9 +95,11 @@ where
                 );
 
                 let client = learning_rate_input.client.clone();
-                let key = |learning_rate_base: &CubeTensor<R>,
-                           learning_rate_input: &CubeTensor<R>,
-                           output_grad: &CubeTensor<R>| {
+                let key = |(learning_rate_base, learning_rate_input, output_grad): &(
+                    CubeTensor<R>,
+                    CubeTensor<R>,
+                    CubeTensor<R>,
+                )| {
                     let shape = learning_rate_input.meta.shape();
                     let max_line_size = max_line_size_backward(
                         learning_rate_base,
@@ -116,9 +117,11 @@ where
                 };
 
                 let input_gen = |_key: &LearningRateGateBackwardAutotuneKey,
-                                 learning_rate_base: &CubeTensor<R>,
-                                 learning_rate_input: &CubeTensor<R>,
-                                 output_grad: &CubeTensor<R>| {
+                                 (learning_rate_base, learning_rate_input, output_grad): &(
+                    CubeTensor<R>,
+                    CubeTensor<R>,
+                    CubeTensor<R>,
+                )| {
                     (
                         learning_rate_base.copy(),
                         learning_rate_input.copy(),
@@ -142,10 +145,15 @@ where
                             for bt_tile in BT_TILE_CANDIDATES {
                                 set = set.with(
                                     Tunable::new(
-                                        format!("line_{line_size}_block_{block_size}_bt_{bt_tile}"),
-                                        (move |learning_rate_base: CubeTensor<R>,
-                                               learning_rate_input: CubeTensor<R>,
-                                               output_grad: CubeTensor<R>| {
+                                        &format!(
+                                            "line_{line_size}_block_{block_size}_bt_{bt_tile}"
+                                        ),
+                                        move |(learning_rate_base, learning_rate_input, output_grad): (
+                                            CubeTensor<R>,
+                                            CubeTensor<R>,
+                                            CubeTensor<R>,
+                                        )| {
+                                            Ok::<_, String>({
                                             let shape = learning_rate_input.meta.shape().clone();
                                             let embedded_dim = shape[2];
                                             let client = learning_rate_input.client.clone();
@@ -252,8 +260,8 @@ where
                                                 learning_rate_base_grad,
                                                 learning_rate_input_grad,
                                             }
-                                        })
-                                        .ok(),
+                                            })
+                                        },
                                     )
                                     .group(&launch_group, move |key| {
                                         if line_size <= key.max_line_size
