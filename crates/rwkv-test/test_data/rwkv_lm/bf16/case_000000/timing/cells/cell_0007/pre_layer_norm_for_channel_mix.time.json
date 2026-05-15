@@ -1,0 +1,1 @@
+{"module": "cells/cell_0007/pre_layer_norm_for_channel_mix", "elapsed_ns": 33571, "repeat": 3, "warmup": 1, "samples_ns": [37988, 32664, 30062]}

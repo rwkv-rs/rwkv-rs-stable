@@ -1,0 +1,1 @@
+{"module": "cells/cell_0010/pre_layer_norm_for_time_mix", "elapsed_ns": 34151, "repeat": 3, "warmup": 1, "samples_ns": [40331, 32584, 29538]}

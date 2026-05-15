@@ -1,0 +1,1 @@
+{"module": "layer_norm0", "elapsed_ns": 193721, "repeat": 3, "warmup": 1, "samples_ns": [242483, 293682, 44999]}

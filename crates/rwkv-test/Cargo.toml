@@ -1,15 +1,35 @@
 [package]
 name = "rwkv-test"
+categories = ["science", "algorithms", "development-tools::testing"]
+keywords = ["rwkv", "llm", "testing", "safetensors", "trace"]
 edition.workspace = true
 license.workspace = true
-readme.workspace = true
+readme = "README.md"
 version.workspace = true
 
+[[bench]]
+name = "rwkv_nn"
+harness = false
+
+[features]
+default = []
+cuda = ["burn/cuda", "rwkv-nn/cuda"]
+cpu = ["burn/cpu", "rwkv-nn/cpu"]
+
 [dependencies]
-anyhow = { workspace = true }
-clap = { workspace = true }
+anyhow = { workspace = true, features = ["std"] }
+burn = { workspace = true, default-features = false, features = ["std", "autodiff"] }
+clap = { workspace = true, features = ["color", "derive", "error-context", "help", "std", "suggestions", "usage"] }
 half = { workspace = true }
+rwkv-export = { path = "../rwkv-export" }
+rwkv-nn = { path = "../rwkv-nn", default-features = false }
 safetensors = { workspace = true }
+serde = { workspace = true }
+sonic-rs = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true, features = ["cargo_bench_support"] }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true
