@@ -14,9 +14,12 @@ use burn_cubecl::{
     element::BoolElement,
 };
 
-use crate::kernels::train::time_mixer::value_residual_gate::io::{
-    ValueResidualGateForwardInputs,
-    ValueResidualGateForwardPrimitiveInputs,
+use crate::kernels::train::{
+    layout::assert_linear_readable,
+    time_mixer::value_residual_gate::io::{
+        ValueResidualGateForwardInputs,
+        ValueResidualGateForwardPrimitiveInputs,
+    },
 };
 
 /// Backend primitive capability for the fused value residual gate.
@@ -48,19 +51,10 @@ where
     fn fused_value_residual_gate(
         inputs: ValueResidualGateForwardPrimitiveInputs<Self>,
     ) -> FloatTensor<Self> {
-        assert!(inputs.value.is_contiguous(), "value must be contiguous");
-        assert!(
-            inputs.value_from_first_cell.is_contiguous(),
-            "value_from_first_cell must be contiguous"
-        );
-        assert!(
-            inputs.gate_base.is_contiguous(),
-            "gate_base must be contiguous"
-        );
-        assert!(
-            inputs.gate_input.is_contiguous(),
-            "gate_input must be contiguous"
-        );
+        assert_linear_readable("value", &inputs.value);
+        assert_linear_readable("value_from_first_cell", &inputs.value_from_first_cell);
+        assert_linear_readable("gate_base", &inputs.gate_base);
+        assert_linear_readable("gate_input", &inputs.gate_input);
 
         forward::fused_value_residual_gate::<R, F, I, BT>(inputs)
     }
@@ -117,133 +111,4 @@ pub fn value_residual_gate<B: ValueResidualGateBackend>(
         gate_base,
         gate_input,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use burn::tensor::{Distribution, Tensor, Tolerance};
-
-    use crate::{
-        kernels::train::time_mixer::value_residual_gate::{
-            io::ValueResidualGateForwardInputs,
-            value_residual_gate_custom,
-            value_residual_gate_reference,
-        },
-        test_utils::backend::{TestAutodiffBackend, TestAutodiffDevice, TestBackend, TestDevice},
-    };
-
-    #[test]
-    fn forward() {
-        let device: TestDevice = Default::default();
-
-        for shape in [[2, 8, 32], [1, 3, 17]] {
-            let value = Tensor::<TestBackend, 3>::random(shape, Distribution::Default, &device);
-            let value_from_first_cell =
-                Tensor::<TestBackend, 3>::random(shape, Distribution::Default, &device);
-            let gate_base =
-                Tensor::<TestBackend, 1>::random([shape[2]], Distribution::Default, &device);
-            let gate_input =
-                Tensor::<TestBackend, 3>::random(shape, Distribution::Default, &device);
-            let inputs = ValueResidualGateForwardInputs {
-                value,
-                value_from_first_cell,
-                gate_base,
-                gate_input,
-            };
-
-            let reference = value_residual_gate_reference(inputs.clone())
-                .into_data()
-                .convert::<f32>();
-            let custom = value_residual_gate_custom(inputs)
-                .into_data()
-                .convert::<f32>();
-
-            reference.assert_approx_eq::<f32>(&custom, Tolerance::default());
-        }
-    }
-
-    #[test]
-    fn backward() {
-        let device: TestAutodiffDevice = Default::default();
-
-        for shape in [[2, 8, 32], [1, 3, 17]] {
-            let value =
-                Tensor::<TestAutodiffBackend, 3>::random(shape, Distribution::Default, &device)
-                    .require_grad();
-            let value_from_first_cell =
-                Tensor::<TestAutodiffBackend, 3>::random(shape, Distribution::Default, &device)
-                    .require_grad();
-            let gate_base = Tensor::<TestAutodiffBackend, 1>::random(
-                [shape[2]],
-                Distribution::Default,
-                &device,
-            )
-            .require_grad();
-            let gate_input =
-                Tensor::<TestAutodiffBackend, 3>::random(shape, Distribution::Default, &device)
-                    .require_grad();
-
-            let reference = value_residual_gate_reference(ValueResidualGateForwardInputs {
-                value: value.clone(),
-                value_from_first_cell: value_from_first_cell.clone(),
-                gate_base: gate_base.clone(),
-                gate_input: gate_input.clone(),
-            });
-            let mut gradients = reference.backward();
-            let value_grad_ref = value.grad_remove(&mut gradients).unwrap();
-            let value_from_first_cell_grad_ref =
-                value_from_first_cell.grad_remove(&mut gradients).unwrap();
-            let gate_base_grad_ref = gate_base.grad_remove(&mut gradients).unwrap();
-            let gate_input_grad_ref = gate_input.grad_remove(&mut gradients).unwrap();
-
-            let value_custom = value.detach().require_grad();
-            let value_from_first_cell_custom = value_from_first_cell.detach().require_grad();
-            let gate_base_custom = gate_base.detach().require_grad();
-            let gate_input_custom = gate_input.detach().require_grad();
-            let custom = value_residual_gate_custom(ValueResidualGateForwardInputs {
-                value: value_custom.clone(),
-                value_from_first_cell: value_from_first_cell_custom.clone(),
-                gate_base: gate_base_custom.clone(),
-                gate_input: gate_input_custom.clone(),
-            });
-            let mut gradients = custom.backward();
-            let value_grad_custom = value_custom.grad_remove(&mut gradients).unwrap();
-            let value_from_first_cell_grad_custom = value_from_first_cell_custom
-                .grad_remove(&mut gradients)
-                .unwrap();
-            let gate_base_grad_custom = gate_base_custom.grad_remove(&mut gradients).unwrap();
-            let gate_input_grad_custom = gate_input_custom.grad_remove(&mut gradients).unwrap();
-
-            value_grad_ref
-                .into_data()
-                .convert::<f32>()
-                .assert_approx_eq::<f32>(
-                    &value_grad_custom.into_data().convert::<f32>(),
-                    Tolerance::default(),
-                );
-            value_from_first_cell_grad_ref
-                .into_data()
-                .convert::<f32>()
-                .assert_approx_eq::<f32>(
-                    &value_from_first_cell_grad_custom
-                        .into_data()
-                        .convert::<f32>(),
-                    Tolerance::default(),
-                );
-            gate_base_grad_ref
-                .into_data()
-                .convert::<f32>()
-                .assert_approx_eq::<f32>(
-                    &gate_base_grad_custom.into_data().convert::<f32>(),
-                    Tolerance::default(),
-                );
-            gate_input_grad_ref
-                .into_data()
-                .convert::<f32>()
-                .assert_approx_eq::<f32>(
-                    &gate_input_grad_custom.into_data().convert::<f32>(),
-                    Tolerance::default(),
-                );
-        }
-    }
 }

@@ -3,22 +3,21 @@ use burn::{
     module::{Module, Param},
     nn::{Linear, LinearConfig},
     prelude::*,
-    tensor::activation::{sigmoid, softplus},
 };
 
 use crate::{
-    functions::{
-        init_weights::{
-            calculate_token_shift_with_offset,
-            constant_init,
-            get_token_shift_diff_scale,
-            uniform_init,
-        },
-        lerp::lerp,
-        normalize::normalize,
+    functions::init_weights::{
+        calculate_token_shift_with_offset,
+        constant_init,
+        get_token_shift_diff_scale,
+        uniform_init,
     },
     kernels::train::time_mixer::{
+        key_prepare::{KeyPrepareBackend, key_prepare},
+        learning_rate_gate::{LearningRateGateBackend, learning_rate_gate},
         mix6::io::Mix6ForwardOutput,
+        value_residual_gate::{ValueResidualGateBackend, value_residual_gate},
+        weight_decay_transform::{WeightDecayTransformBackend, weight_decay_transform},
         wkv7::io::Wkv7PretrainForwardInputs,
     },
     layers::lora::{ActivationFn, LoRA, LoRAConfig, LoRAType},
@@ -212,7 +211,11 @@ impl<B: Backend> WeightPrepare<B> {
         value_from_first_cell: Tensor<B, 3>,
     ) -> WeightPrepareOutput<B>
     where
-        B: crate::kernels::train::time_mixer::mix6::Mix6Backend,
+        B: crate::kernels::train::time_mixer::mix6::Mix6Backend
+            + KeyPrepareBackend
+            + LearningRateGateBackend
+            + ValueResidualGateBackend
+            + WeightDecayTransformBackend,
     {
         // Paper equations implemented:
         // 355: x^{square}_t = lerp(x_t, x_{t-1}, mu_{square})  -- Time shifting
@@ -234,8 +237,8 @@ impl<B: Backend> WeightPrepare<B> {
             learning_rate_input,
             gate_input: _,
         } = mix6_output;
-        let [batch_size, context_length, embedded_dim] = receptance_input.dims();
-        let (num_heads, head_size) = (self.num_heads, self.head_size);
+        let [_batch_size, _context_length, embedded_dim] = receptance_input.dims();
+        let head_size = self.head_size;
 
         let receptance = self.projection_receptance.forward(receptance_input);
 
@@ -249,51 +252,60 @@ impl<B: Backend> WeightPrepare<B> {
             value_from_first_cell
         };
 
-        let learning_rate = sigmoid(self.param_learning_rate_lora.forward(learning_rate_input));
-
-        let alpha_modulated =
-            self.param_key_replacement.val() * (learning_rate.clone() - 1.0) + 1.0;
-
-        let replacement_key = key_precursor.clone() * alpha_modulated;
+        let learning_rate_input = self
+            .param_learning_rate_lora
+            .forward_without_bias(learning_rate_input);
+        let learning_rate_base = self
+            .param_learning_rate_lora
+            .bias_1d()
+            .expect("learning-rate LoRA must have a bias");
+        let learning_rate = learning_rate_gate(learning_rate_base, learning_rate_input);
 
         let value = if self.cell_id != 0 {
-            let nu_t = sigmoid(
-                self.param_value_residual_lora
-                    .as_ref()
-                    .unwrap()
-                    .forward(value_input),
-            );
+            let value_residual_lora = self
+                .param_value_residual_lora
+                .as_ref()
+                .expect("nonzero cells must have value-residual LoRA");
+            let gate_input = value_residual_lora.forward_without_bias(value_input);
+            let gate_base = value_residual_lora
+                .bias_1d()
+                .expect("value-residual LoRA must have a bias");
 
-            lerp(value_precursor, value_from_first_cell.clone(), nu_t)
+            value_residual_gate(
+                value_precursor,
+                value_from_first_cell.clone(),
+                gate_base,
+                gate_input,
+            )
         } else {
             value_precursor
         };
 
-        let weight_decay_lora_result = self.param_weight_decay_lora.forward(weight_decay_input);
+        let weight_decay_input = self
+            .param_weight_decay_lora
+            .forward_without_bias(weight_decay_input);
+        let weight_decay_base = self
+            .param_weight_decay_lora
+            .bias_1d()
+            .expect("weight-decay LoRA must have a bias");
+        let weight_decay = weight_decay_transform(weight_decay_base, weight_decay_input);
 
-        let weight_decay = -softplus(-weight_decay_lora_result, 1.0) - 0.5;
-
-        let removal_key = key_precursor * self.param_key_removal.val();
-
-        let removal_key_reshaped =
-            removal_key.reshape([batch_size, context_length, num_heads, head_size]);
-
-        let removal_key_normalized = -normalize(removal_key_reshaped, 2.0, -1, 1e-12).reshape([
-            batch_size,
-            context_length,
-            embedded_dim,
-        ]);
-
-        let replacement = -removal_key_normalized.clone() * learning_rate;
+        let key_prepare_output = key_prepare(
+            key_precursor,
+            self.param_key_removal.val().reshape([embedded_dim]),
+            learning_rate,
+            self.param_key_replacement.val().reshape([embedded_dim]),
+            head_size,
+        );
 
         WeightPrepareOutput {
             value_from_first_cell,
             receptance,
             weight_decay,
-            replacement_key,
+            replacement_key: key_prepare_output.replacement_key,
             value,
-            removal_key_normalized,
-            replacement,
+            removal_key_normalized: key_prepare_output.removal_key_normalized,
+            replacement: key_prepare_output.replacement,
         }
     }
 }

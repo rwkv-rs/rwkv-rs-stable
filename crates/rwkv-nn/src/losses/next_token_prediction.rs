@@ -1,0 +1,37 @@
+use burn::{Tensor, prelude::Backend, tensor::Transaction};
+use burn_ndarray::NdArray;
+use burn_train::{
+    ItemLazy,
+    metric::{Adaptor, LossInput},
+};
+
+/// Lazy metric output for next-token prediction training.
+#[derive(new)]
+pub struct NextTokenPredictionOutput<B: Backend> {
+    /// Scalar loss tensor reported to Burn's loss metric.
+    pub loss: Tensor<B, 1>,
+}
+
+impl<B: Backend> ItemLazy for NextTokenPredictionOutput<B> {
+    type ItemSync = NextTokenPredictionOutput<NdArray>;
+
+    fn sync(self) -> Self::ItemSync {
+        let [loss] = Transaction::default()
+            .register(self.loss)
+            .execute()
+            .try_into()
+            .expect("Correct amount of tensor data");
+
+        let device = &Default::default();
+
+        NextTokenPredictionOutput {
+            loss: Tensor::from_data(loss, device),
+        }
+    }
+}
+
+impl<B: Backend> Adaptor<LossInput<B>> for NextTokenPredictionOutput<B> {
+    fn adapt(&self) -> LossInput<B> {
+        LossInput::new(self.loss.clone())
+    }
+}

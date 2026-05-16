@@ -6,10 +6,7 @@ use burn::{
 };
 
 use crate::{
-    kernels::{
-        template::{addcmul::AddcmulBackend, token_shift_diff::TokenShiftDiffBackend},
-        train::time_mixer::{mix6::Mix6Backend, wkv7::Wkv7Backend},
-    },
+    kernels::train::{TrainBackend, layer_norm::layer_norm},
     modules::{
         channel_mixer::{ChannelMixer, ChannelMixerConfig, ChannelMixerIO},
         time_mixer::{TimeMixer, TimeMixerConfig, TimeMixerIO},
@@ -76,7 +73,7 @@ impl<B: Backend> MultiCausalCells<B> {
     /// Runs the input through each causal cell in order.
     pub fn forward(&self, multi_causal_cells_input: MultiCausalCellsIO<B>) -> MultiCausalCellsIO<B>
     where
-        B: AddcmulBackend + TokenShiftDiffBackend + Mix6Backend + Wkv7Backend,
+        B: TrainBackend,
     {
         let MultiCausalCellsIO {
             embedded_context,
@@ -133,6 +130,7 @@ impl<B: Backend> MultiCausalCells<B> {
 }
 
 /// Input and output tensors for [`MultiCausalCells`].
+#[derive(Clone)]
 pub struct MultiCausalCellsIO<B: Backend> {
     /// Embedded context with shape `[batch_size, context_length, embedded_dim]`.
     pub embedded_context: Tensor<B, 3>, // [batch_size, context_length, embedded_dim]
@@ -207,15 +205,22 @@ impl<B: Backend> CausalCell<B> {
     }
 }
 
-impl<B: AddcmulBackend + TokenShiftDiffBackend + Mix6Backend + Wkv7Backend> CausalCell<B> {
+impl<B: TrainBackend> CausalCell<B> {
     #[cfg_attr(feature = "trace", tracing::instrument(name = "rwkv.infer.model.cell", skip_all, fields(cell_id = self.cell_id)))]
     /// Runs one causal cell forward pass.
     pub fn forward(&self, causal_cell_input: CausalCellIO<B>) -> CausalCellIO<B> {
         let embedded_context = causal_cell_input.embedded_context;
 
-        let embedded_context_normalized = self
-            .pre_layer_norm_for_time_mix
-            .forward(embedded_context.clone());
+        let embedded_context_normalized = layer_norm(
+            embedded_context.clone(),
+            self.pre_layer_norm_for_time_mix.gamma.val(),
+            self.pre_layer_norm_for_time_mix
+                .beta
+                .as_ref()
+                .expect("rwkv causal cell layer norm requires affine beta")
+                .val(),
+            1e-5,
+        );
         let time_mixer_input = TimeMixerIO {
             embedded_context: embedded_context_normalized,
             value_from_first_cell: causal_cell_input.value_from_first_cell.clone(),
@@ -226,9 +231,16 @@ impl<B: AddcmulBackend + TokenShiftDiffBackend + Mix6Backend + Wkv7Backend> Caus
 
         let embedded_context = embedded_context + time_mixer_output.embedded_context;
 
-        let embedded_context_normalized = self
-            .pre_layer_norm_for_channel_mix
-            .forward(embedded_context.clone());
+        let embedded_context_normalized = layer_norm(
+            embedded_context.clone(),
+            self.pre_layer_norm_for_channel_mix.gamma.val(),
+            self.pre_layer_norm_for_channel_mix
+                .beta
+                .as_ref()
+                .expect("rwkv causal cell layer norm requires affine beta")
+                .val(),
+            1e-5,
+        );
 
         let channel_mixer_input = ChannelMixerIO {
             embedded_context: embedded_context_normalized,
@@ -249,6 +261,7 @@ impl<B: AddcmulBackend + TokenShiftDiffBackend + Mix6Backend + Wkv7Backend> Caus
 }
 
 /// Input and output tensors for one [`CausalCell`].
+#[derive(Clone)]
 pub struct CausalCellIO<B: Backend> {
     /// Embedded context with shape `[batch_size, context_len, embedded_dim]`.
     pub embedded_context: Tensor<B, 3>, // [batch_size, context_len, embedded_dim]

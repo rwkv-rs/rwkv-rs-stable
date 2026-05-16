@@ -2,16 +2,13 @@ use burn::{
     config::Config,
     module::{Module, Param},
     nn::{Linear, LinearConfig},
-    prelude::{Backend, Int, Tensor},
-    tensor::{TensorData, activation::relu},
+    prelude::{Backend, Tensor},
+    tensor::activation::relu,
 };
 
 use crate::{
     functions::init_weights::{get_token_shift_diff_scale, uniform_init, zeros_init},
-    kernels::template::{
-        addcmul::{AddcmulBackend, addcmul},
-        token_shift_diff::{TokenShiftDiffBackend, token_shift_diff},
-    },
+    kernels::train::channel_mixer::{ChannelMixerBackend, channel_mixer},
 };
 
 #[derive(Config, Debug)]
@@ -72,7 +69,7 @@ impl<B: Backend> ChannelMixer<B> {
     }
 }
 
-impl<B: AddcmulBackend + TokenShiftDiffBackend> ChannelMixer<B> {
+impl<B: ChannelMixerBackend> ChannelMixer<B> {
     #[cfg_attr(
         feature = "trace",
         tracing::instrument(name = "rwkv.infer.model.channel_mixer", skip_all)
@@ -83,40 +80,69 @@ impl<B: AddcmulBackend + TokenShiftDiffBackend> ChannelMixer<B> {
             embedded_context,
             embedded_token_shift,
         } = channel_mixer_input;
-        let [batch_size, _context_len, embedded_dim] = embedded_context.dims();
-        let device = embedded_context.device();
-        let embedded_token_shift = embedded_token_shift
-            .unwrap_or_else(|| Tensor::zeros([batch_size, embedded_dim], &device));
-        let batch_ids = Tensor::<B, 1, Int>::from_ints(
-            TensorData::new(
-                (0..batch_size)
-                    .map(|batch_index| batch_index as i32)
-                    .collect::<Vec<_>>(),
-                [batch_size],
-            ),
-            &device,
-        );
+        let [batch_size, context_len, embedded_dim] = embedded_context.dims();
 
-        let token_shift_diff_output =
-            token_shift_diff(embedded_context.clone(), embedded_token_shift, batch_ids);
-        let embedded_context_shift = addcmul(
-            embedded_context,
-            token_shift_diff_output.token_shifted_diff,
-            self.token_shift_diff_scale.val(),
-        );
+        let (value, next_token_shift) = if let Some(embedded_token_shift) = embedded_token_shift {
+            let embedded_context_shift = if context_len == 0 {
+                embedded_context.clone()
+            } else {
+                let previous = if context_len == 1 {
+                    embedded_token_shift.unsqueeze_dim::<3>(1)
+                } else {
+                    Tensor::cat(
+                        vec![
+                            embedded_token_shift.unsqueeze_dim::<3>(1),
+                            embedded_context.clone().slice([
+                                0..batch_size,
+                                0..(context_len - 1),
+                                0..embedded_dim,
+                            ]),
+                        ],
+                        1,
+                    )
+                };
+                embedded_context.clone()
+                    + (previous - embedded_context.clone()) * self.token_shift_diff_scale.val()
+            };
+            let activated_key = relu(self.key.forward(embedded_context_shift)).powf_scalar(2.0);
+            let value = self.value.forward(activated_key);
+            let next_token_shift = if context_len == 0 {
+                None
+            } else {
+                Some(
+                    embedded_context
+                        .slice([
+                            0..batch_size,
+                            (context_len - 1)..context_len,
+                            0..embedded_dim,
+                        ])
+                        .reshape([batch_size, embedded_dim]),
+                )
+            };
 
-        let activated_key = relu(self.key.forward(embedded_context_shift)).powf_scalar(2.0);
-
-        let value = self.value.forward(activated_key);
+            (value, next_token_shift)
+        } else {
+            (
+                channel_mixer(
+                    embedded_context,
+                    self.token_shift_diff_scale.val().reshape([embedded_dim]),
+                    self.key.weight.val(),
+                    self.value.weight.val(),
+                ),
+                None,
+            )
+        };
 
         ChannelMixerIO {
             embedded_context: value,
             embedded_token_shift: should_return_token_shift
-                .then_some(token_shift_diff_output.next_token_shift),
+                .then_some(next_token_shift)
+                .flatten(),
         }
     }
 }
 
+#[derive(Clone)]
 pub struct ChannelMixerIO<B: Backend> {
     pub embedded_context: Tensor<B, 3>,
     pub embedded_token_shift: Option<Tensor<B, 2>>,

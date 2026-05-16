@@ -1,54 +1,73 @@
 use burn::tensor::DType;
 use burn_cubecl::{
-    CubeBackend,
-    CubeElement,
-    CubeRuntime,
-    CubeTuneId,
-    FloatElement,
-    IntElement,
     cubecl::{
         calculate_cube_count_elemwise,
         prelude::*,
         tensor_vector_size_parallel,
         tune::{
+            anchor,
+            local_tuner,
             AutotuneKey,
             AutotuneOutput,
             LocalTuner,
             Tunable,
             TunableSet,
             TuneGroup,
-            anchor,
-            local_tuner,
         },
     },
     element::BoolElement,
     ops::numeric::empty_device,
     tensor::CubeTensor,
+    CubeBackend,
+    CubeElement,
+    CubeRuntime,
+    CubeTuneId,
+    FloatElement,
+    IntElement,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::kernels::train::time_mixer::mix6::{
-    io::{Mix6ForwardPrimitiveInputs, Mix6ForwardPrimitiveOutput},
-    kernel::{Mix6ForwardInputsLaunch, Mix6ForwardOutputsLaunch, mix6_forward_kernel},
+use crate::kernels::train::{
+    layout::CubeHardwareFingerprint,
+    time_mixer::mix6::{
+        io::{Mix6ForwardPrimitiveInputs, Mix6ForwardPrimitiveOutput},
+        kernel::{mix6_forward_kernel, Mix6ForwardInputsLaunch, Mix6ForwardOutputsLaunch},
+    },
 };
 
 const LINE_SIZE_CANDIDATES: [usize; 7] = [1, 2, 4, 8, 16, 32, 64];
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
 struct Mix6ForwardAutotuneKey {
+    runtime: String,
     dtype: DType,
     num_elements: usize,
-    embedded_dim: usize,
+    batch_size: usize,
     context_len: usize,
+    embedded_dim: usize,
+    rows: usize,
+    hardware: CubeHardwareFingerprint,
     max_line_size: usize,
+    is_in_place: bool,
+    deterministic: bool,
 }
 
 impl core::fmt::Display for Mix6ForwardAutotuneKey {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
-            "{:?}:{}:{}:{}:{}",
-            self.dtype, self.num_elements, self.embedded_dim, self.context_len, self.max_line_size
+            "{}:{:?}:n{}:b{}:t{}:d{}:r{}:{}:line{}:inplace{}:det{}",
+            self.runtime,
+            self.dtype,
+            self.num_elements,
+            self.batch_size,
+            self.context_len,
+            self.embedded_dim,
+            self.rows,
+            self.hardware,
+            self.max_line_size,
+            self.is_in_place,
+            self.deterministic
         )
     }
 }
@@ -110,12 +129,21 @@ pub(crate) fn fused_mix6<
         CubeTensor<R>,
     )| {
         let shape = embedded_context.meta.shape();
+        let batch_size = shape[0];
+        let context_len = shape[1];
+        let embedded_dim = shape[2];
+        let hardware =
+            CubeHardwareFingerprint::from_hardware(&embedded_context.client.properties().hardware);
 
         Mix6ForwardAutotuneKey {
+            runtime: R::name(&embedded_context.client).to_owned(),
             dtype: embedded_context.dtype,
             num_elements: anchor(shape.num_elements(), None, Some(1), None),
-            embedded_dim: shape[2],
-            context_len: anchor(shape[1], None, Some(1), None),
+            batch_size,
+            context_len: anchor(context_len, None, Some(1), None),
+            embedded_dim,
+            rows: anchor(batch_size * context_len, None, Some(1), None),
+            hardware,
             max_line_size: max_line_size_many(
                 &[
                     embedded_context,
@@ -128,6 +156,8 @@ pub(crate) fn fused_mix6<
                 ],
                 shape.num_dims() - 1,
             ),
+            is_in_place: false,
+            deterministic: true,
         }
     };
 
@@ -226,10 +256,10 @@ pub(crate) fn fused_mix6<
 mod fusion_impl {
     use burn::tensor::{Element, Shape};
     use burn_fusion::{
+        stream::{Operation, OperationStreams},
         Fusion,
         FusionBackend,
         FusionRuntime,
-        stream::{Operation, OperationStreams},
     };
     use burn_ir::{CustomOpIr, HandleContainer, OperationIr, TensorIr};
 
@@ -266,23 +296,8 @@ mod fusion_impl {
                     >,
                 ) {
                     let (
-                        [
-                            embedded_context,
-                            receptance_scale,
-                            weight_decay_scale,
-                            key_scale,
-                            value_scale,
-                            learning_rate_scale,
-                            gate_scale,
-                        ],
-                        [
-                            receptance_input_out,
-                            weight_decay_input_out,
-                            key_input_out,
-                            value_input_out,
-                            learning_rate_input_out,
-                            gate_input_out,
-                        ],
+                        [embedded_context, receptance_scale, weight_decay_scale, key_scale, value_scale, learning_rate_scale, gate_scale],
+                        [receptance_input_out, weight_decay_input_out, key_input_out, value_input_out, learning_rate_input_out, gate_input_out],
                     ) = self.desc.as_fixed();
 
                     let output = B1::fused_mix6(Mix6ForwardPrimitiveInputs {
@@ -476,10 +491,10 @@ where
     // Each work unit owns one contiguous embedded-dimension vector for one token. It reads the
     // current token vector and, except at the first time position, the previous token vector from
     // the same batch. The resulting shift difference stays live once and is reused across six
-    // branch formulas. Autotune only enables vector sizes that divide `embedded_dim`, so the
-    // previous-token offset is an integer number of vector lanes.
+    // branch formulas. The selected vector width divides `embedded_dim`, so the previous-token
+    // offset is an integer number of vector lanes.
     // SAFETY: The public contract checks shapes/dtype/device and primitive dispatch checks
-    // contiguity. The tuned vector width divides the embedded axis, and all outputs are allocated
+    // contiguity. The selected vector width divides the embedded axis, and all outputs are allocated
     // with the exact input shape.
     unsafe {
         mix6_forward_kernel::launch_unchecked::<F, R>(

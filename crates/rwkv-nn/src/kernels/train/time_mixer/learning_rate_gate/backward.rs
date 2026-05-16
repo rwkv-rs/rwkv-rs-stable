@@ -1,48 +1,51 @@
 use burn::{
     backend::autodiff::{
-        Autodiff,
-        NodeId,
         checkpoint::{base::Checkpointer, strategy::CheckpointStrategy},
         grads::Gradients,
         ops::{Backward, Ops, OpsKind},
+        Autodiff,
+        NodeId,
     },
-    tensor::{Shape, ops::FloatTensor},
+    tensor::{ops::FloatTensor, Shape},
 };
 use burn_cubecl::{
-    CubeBackend,
-    CubeElement,
-    CubeRuntime,
-    CubeTuneId,
-    FloatElement,
-    IntElement,
     cubecl::{
-        CubeCount,
-        CubeDim,
         prelude::*,
         tensor_vector_size_parallel,
         tune::{
+            anchor,
+            local_tuner,
             AutotuneKey,
             AutotuneOutput,
             LocalTuner,
             Tunable,
             TunableSet,
             TuneGroup,
-            anchor,
-            local_tuner,
         },
+        CubeCount,
+        CubeDim,
     },
     element::BoolElement,
     ops::numeric::{empty_device, zeros_client},
     tensor::CubeTensor,
+    CubeBackend,
+    CubeElement,
+    CubeRuntime,
+    CubeTuneId,
+    FloatElement,
+    IntElement,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::kernels::train::time_mixer::learning_rate_gate::{
-    LearningRateGateBackend,
-    io::{LearningRateGateBackwardPrimitiveOutputs, LearningRateGateForwardPrimitiveInputs},
-    kernel::{
-        learning_rate_gate_backward_finalize_kernel,
-        learning_rate_gate_backward_partial_kernel,
+use crate::kernels::train::{
+    layout::{assert_linear_readable, CubeHardwareFingerprint},
+    time_mixer::learning_rate_gate::{
+        io::{LearningRateGateBackwardPrimitiveOutputs, LearningRateGateForwardPrimitiveInputs},
+        kernel::{
+            learning_rate_gate_backward_finalize_kernel,
+            learning_rate_gate_backward_partial_kernel,
+        },
+        LearningRateGateBackend,
     },
 };
 
@@ -81,18 +84,9 @@ where
                 let learning_rate_input: FloatTensor<CubeBackend<R, F, I, BT>> =
                     checkpointer.retrieve_node_output(learning_rate_input_state);
 
-                assert!(
-                    learning_rate_base.is_contiguous(),
-                    "learning_rate_base must be contiguous"
-                );
-                assert!(
-                    learning_rate_input.is_contiguous(),
-                    "learning_rate_input must be contiguous"
-                );
-                assert!(
-                    output_grad.is_contiguous(),
-                    "output_grad must be contiguous"
-                );
+                assert_linear_readable("learning_rate_base", &learning_rate_base);
+                assert_linear_readable("learning_rate_input", &learning_rate_input);
+                assert_linear_readable("output_grad", &output_grad);
 
                 let client = learning_rate_input.client.clone();
                 let key = |(learning_rate_base, learning_rate_input, output_grad): &(
@@ -101,6 +95,9 @@ where
                     CubeTensor<R>,
                 )| {
                     let shape = learning_rate_input.meta.shape();
+                    let hardware = CubeHardwareFingerprint::from_hardware(
+                        &learning_rate_input.client.properties().hardware,
+                    );
                     let max_line_size = max_line_size_backward(
                         learning_rate_base,
                         learning_rate_input,
@@ -108,11 +105,15 @@ where
                     );
 
                     LearningRateGateBackwardAutotuneKey {
+                        runtime: R::name(&learning_rate_input.client).to_owned(),
                         dtype: learning_rate_input.dtype,
                         num_elements: anchor(shape.num_elements(), None, Some(1), None),
-                        embedded_dim: shape[2],
-                        bt_len: anchor(shape[0] * shape[1], None, Some(1), None),
+                        d_model: shape[2],
+                        rows: anchor(shape[0] * shape[1], None, Some(1), None),
+                        hardware,
                         max_line_size,
+                        is_in_place: false,
+                        deterministic: true,
                     }
                 };
 
@@ -265,7 +266,8 @@ where
                                     )
                                     .group(&launch_group, move |key| {
                                         if line_size <= key.max_line_size
-                                            && key.embedded_dim.is_multiple_of(line_size)
+                                            && key.d_model.is_multiple_of(line_size)
+                                            && block_size <= key.hardware.max_units_per_cube
                                         {
                                             1
                                         } else {
@@ -339,19 +341,31 @@ const BT_TILE_CANDIDATES: [usize; 4] = [16, 32, 64, 128];
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
 struct LearningRateGateBackwardAutotuneKey {
+    runtime: String,
     dtype: burn::tensor::DType,
     num_elements: usize,
-    embedded_dim: usize,
-    bt_len: usize,
+    d_model: usize,
+    rows: usize,
+    hardware: CubeHardwareFingerprint,
     max_line_size: usize,
+    is_in_place: bool,
+    deterministic: bool,
 }
 
 impl core::fmt::Display for LearningRateGateBackwardAutotuneKey {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
-            "{:?}:{}:{}:{}:{}",
-            self.dtype, self.num_elements, self.embedded_dim, self.bt_len, self.max_line_size
+            "{}:{:?}:n{}:d{}:r{}:hw{}:line{}:inplace{}:det{}",
+            self.runtime,
+            self.dtype,
+            self.num_elements,
+            self.d_model,
+            self.rows,
+            self.hardware,
+            self.max_line_size,
+            self.is_in_place,
+            self.deterministic
         )
     }
 }

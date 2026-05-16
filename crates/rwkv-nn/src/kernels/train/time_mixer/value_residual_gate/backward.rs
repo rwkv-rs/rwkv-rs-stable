@@ -1,51 +1,54 @@
 use burn::{
     backend::autodiff::{
-        Autodiff,
-        NodeId,
         checkpoint::{base::Checkpointer, strategy::CheckpointStrategy},
         grads::Gradients,
         ops::{Backward, Ops, OpsKind},
+        Autodiff,
+        NodeId,
     },
-    tensor::{Shape, ops::FloatTensor},
+    tensor::{ops::FloatTensor, Shape},
 };
 use burn_cubecl::{
-    CubeBackend,
-    CubeElement,
-    CubeRuntime,
-    CubeTuneId,
-    FloatElement,
-    IntElement,
     cubecl::{
-        CubeCount,
-        CubeDim,
         calculate_cube_count_elemwise,
         prelude::*,
         tensor_vector_size_parallel,
         tune::{
+            anchor,
+            local_tuner,
             AutotuneKey,
             AutotuneOutput,
             LocalTuner,
             Tunable,
             TunableSet,
             TuneGroup,
-            anchor,
-            local_tuner,
         },
+        CubeCount,
+        CubeDim,
     },
     element::BoolElement,
     ops::numeric::{empty_device, zeros_client},
     tensor::CubeTensor,
+    CubeBackend,
+    CubeElement,
+    CubeRuntime,
+    CubeTuneId,
+    FloatElement,
+    IntElement,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::kernels::train::time_mixer::value_residual_gate::{
-    ValueResidualGateBackend,
-    io::{ValueResidualGateBackwardPrimitiveOutputs, ValueResidualGateForwardPrimitiveInputs},
-    kernel::{
-        value_residual_gate_backward_elementwise_kernel,
-        value_residual_gate_backward_elementwise_pow2_kernel,
-        value_residual_gate_base_reduce_finalize_kernel,
-        value_residual_gate_base_reduce_partial_kernel,
+use crate::kernels::train::{
+    layout::{assert_linear_readable, CubeHardwareFingerprint},
+    time_mixer::value_residual_gate::{
+        io::{ValueResidualGateBackwardPrimitiveOutputs, ValueResidualGateForwardPrimitiveInputs},
+        kernel::{
+            value_residual_gate_backward_elementwise_kernel,
+            value_residual_gate_backward_elementwise_pow2_kernel,
+            value_residual_gate_base_reduce_finalize_kernel,
+            value_residual_gate_base_reduce_partial_kernel,
+        },
+        ValueResidualGateBackend,
     },
 };
 
@@ -70,12 +73,7 @@ where
             I: IntElement,
             BT: BoolElement,
         {
-            type State = (
-                NodeId,
-                NodeId,
-                NodeId,
-                FloatTensor<CubeBackend<R, F, I, BT>>,
-            );
+            type State = (NodeId, NodeId, NodeId, NodeId);
 
             fn backward(
                 self,
@@ -83,33 +81,25 @@ where
                 grads: &mut Gradients,
                 checkpointer: &mut Checkpointer,
             ) {
-                let [
-                    node_value,
-                    node_value_from_first_cell,
-                    node_gate_base,
-                    node_gate_input,
-                ] = ops.parents;
+                let [node_value, node_value_from_first_cell, node_gate_base, node_gate_input] =
+                    ops.parents;
                 let output_grad = grads.consume::<CubeBackend<R, F, I, BT>>(&ops.node);
-                let (value_state, value_from_first_cell_state, gate_input_state, gate_base) =
+                let (value_state, value_from_first_cell_state, gate_base_state, gate_input_state) =
                     ops.state;
                 let value: FloatTensor<CubeBackend<R, F, I, BT>> =
                     checkpointer.retrieve_node_output(value_state);
                 let value_from_first_cell: FloatTensor<CubeBackend<R, F, I, BT>> =
                     checkpointer.retrieve_node_output(value_from_first_cell_state);
+                let gate_base: FloatTensor<CubeBackend<R, F, I, BT>> =
+                    checkpointer.retrieve_node_output(gate_base_state);
                 let gate_input: FloatTensor<CubeBackend<R, F, I, BT>> =
                     checkpointer.retrieve_node_output(gate_input_state);
 
-                assert!(value.is_contiguous(), "value must be contiguous");
-                assert!(
-                    value_from_first_cell.is_contiguous(),
-                    "value_from_first_cell must be contiguous"
-                );
-                assert!(gate_base.is_contiguous(), "gate_base must be contiguous");
-                assert!(gate_input.is_contiguous(), "gate_input must be contiguous");
-                assert!(
-                    output_grad.is_contiguous(),
-                    "output_grad must be contiguous"
-                );
+                assert_linear_readable("value", &value);
+                assert_linear_readable("value_from_first_cell", &value_from_first_cell);
+                assert_linear_readable("gate_base", &gate_base);
+                assert_linear_readable("gate_input", &gate_input);
+                assert_linear_readable("output_grad", &output_grad);
 
                 let client = value.client.clone();
                 let key =
@@ -121,12 +111,17 @@ where
                         CubeTensor<R>,
                     )| {
                         let shape = value.meta.shape();
+                        let hardware = CubeHardwareFingerprint::from_hardware(
+                            &value.client.properties().hardware,
+                        );
 
                         ValueResidualGateBackwardAutotuneKey {
+                            runtime: R::name(&value.client).to_owned(),
                             dtype: value.dtype,
                             num_elements: anchor(shape.num_elements(), None, Some(1), None),
-                            embedded_dim: shape[2],
-                            bt_len: anchor(shape[0] * shape[1], None, Some(1), None),
+                            d_model: shape[2],
+                            rows: anchor(shape[0] * shape[1], None, Some(1), None),
+                            hardware,
                             max_line_size: max_line_size_backward(
                                 value,
                                 value_from_first_cell,
@@ -134,6 +129,8 @@ where
                                 gate_input,
                                 output_grad,
                             ),
+                            is_in_place: false,
+                            deterministic: true,
                         }
                     };
 
@@ -189,27 +186,27 @@ where
                                                 CubeTensor<R>,
                                             )| {
                                                 Ok::<_, String>({
-                                                let shape = value.meta.shape().clone();
-                                                let embedded_dim = shape[2];
-                                                let client = value.client.clone();
-                                                let device = value.device.clone();
-                                                let dtype = value.dtype;
-                                                let value_grad = empty_device::<R, F>(
-                                                    client.clone(),
-                                                    device.clone(),
-                                                    shape.clone(),
-                                                );
-                                                let value_from_first_cell_grad =
-                                                    empty_device::<R, F>(
+                                                    let shape = value.meta.shape().clone();
+                                                    let embedded_dim = shape[2];
+                                                    let client = value.client.clone();
+                                                    let device = value.device.clone();
+                                                    let dtype = value.dtype;
+                                                    let value_grad = empty_device::<R, F>(
                                                         client.clone(),
                                                         device.clone(),
                                                         shape.clone(),
                                                     );
-                                                let gate_input_grad = empty_device::<R, F>(
-                                                    client.clone(),
-                                                    device.clone(),
-                                                    shape.clone(),
-                                                );
+                                                    let value_from_first_cell_grad =
+                                                        empty_device::<R, F>(
+                                                            client.clone(),
+                                                            device.clone(),
+                                                            shape.clone(),
+                                                        );
+                                                    let gate_input_grad = empty_device::<R, F>(
+                                                        client.clone(),
+                                                        device.clone(),
+                                                        shape.clone(),
+                                                    );
 
                                                 if shape.num_elements() > 0 {
                                                     let working_units =
@@ -372,9 +369,10 @@ where
                                             },
                                         )
                                         .group(&launch_group, move |key| {
-                                            let channel_vecs = key.embedded_dim / line_size;
+                                            let channel_vecs = key.d_model / line_size;
                                             let valid_line_size = line_size <= key.max_line_size
-                                                && key.embedded_dim.is_multiple_of(line_size);
+                                                && key.d_model.is_multiple_of(line_size)
+                                                && block_size <= key.hardware.max_units_per_cube;
                                             let valid_index = !use_pow2_index
                                                 || channel_vecs.is_power_of_two();
 
@@ -453,13 +451,14 @@ where
             OpsKind::Tracked(mut prep) => {
                 let value_state = prep.checkpoint(&value);
                 let value_from_first_cell_state = prep.checkpoint(&value_from_first_cell);
+                let gate_base_state = prep.checkpoint(&gate_base);
                 let gate_input_state = prep.checkpoint(&gate_input);
                 prep.finish(
                     (
                         value_state,
                         value_from_first_cell_state,
+                        gate_base_state,
                         gate_input_state,
-                        gate_base.primitive,
                     ),
                     output,
                 )
@@ -475,19 +474,31 @@ const BT_TILE_CANDIDATES: [usize; 3] = [64, 128, 256];
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
 struct ValueResidualGateBackwardAutotuneKey {
+    runtime: String,
     dtype: burn::tensor::DType,
     num_elements: usize,
-    embedded_dim: usize,
-    bt_len: usize,
+    d_model: usize,
+    rows: usize,
+    hardware: CubeHardwareFingerprint,
     max_line_size: usize,
+    is_in_place: bool,
+    deterministic: bool,
 }
 
 impl core::fmt::Display for ValueResidualGateBackwardAutotuneKey {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
-            "{:?}:{}:{}:{}:{}",
-            self.dtype, self.num_elements, self.embedded_dim, self.bt_len, self.max_line_size
+            "{}:{:?}:n{}:d{}:r{}:hw{}:line{}:inplace{}:det{}",
+            self.runtime,
+            self.dtype,
+            self.num_elements,
+            self.d_model,
+            self.rows,
+            self.hardware,
+            self.max_line_size,
+            self.is_in_place,
+            self.deterministic
         )
     }
 }

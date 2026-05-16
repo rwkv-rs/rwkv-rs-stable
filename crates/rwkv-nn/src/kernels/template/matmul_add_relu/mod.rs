@@ -41,7 +41,7 @@ pub fn matmul_add_relu_reference<B: MatmulAddReluBackend>(
 
 #[cfg(test)]
 mod tests {
-    use burn::tensor::{Distribution, Tensor, Tolerance};
+    use burn::tensor::{Distribution, Tensor};
 
     use crate::{
         kernels::template::matmul_add_relu::{
@@ -49,8 +49,13 @@ mod tests {
             matmul_add_relu_custom,
             matmul_add_relu_reference,
         },
-        test_utils::backend::{TestAutodiffBackend, TestAutodiffDevice, TestBackend, TestDevice},
+        test_utils::{
+            backend::{TestAutodiffBackend, TestAutodiffDevice, TestBackend, TestDevice},
+            numeric::{NumericTolerance, assert_tensor_close},
+        },
     };
+
+    const TOLERANCE: NumericTolerance = NumericTolerance::new(3.0e-3, 5.0e-4, 0.999999);
 
     /// Please name this function "forward" when you reuse this template.
     #[test]
@@ -63,12 +68,15 @@ mod tests {
 
         let inputs = MatmulAddReluInputs { lhs, rhs, bias };
 
-        let reference = matmul_add_relu_reference(inputs.clone())
-            .into_data()
-            .convert::<f32>();
-        let custom = matmul_add_relu_custom(inputs).into_data().convert::<f32>();
+        let reference = matmul_add_relu_reference(inputs.clone());
+        let custom = matmul_add_relu_custom(inputs);
 
-        reference.assert_approx_eq::<f32>(&custom, Tolerance::default());
+        assert_tensor_close(
+            "kernels/template/matmul_add_relu/forward",
+            custom,
+            reference,
+            TOLERANCE,
+        );
 
         println!("Both reference and the custom fused kernel have the same output");
     }
@@ -118,33 +126,30 @@ mod tests {
         let rhs_grad_custom = rhs_custom.grad_remove(&mut gradients).unwrap();
         let bias_grad_custom = bias_custom.grad_remove(&mut gradients).unwrap();
 
-        lhs_grad_ref
-            .into_data()
-            .convert::<f32>()
-            .assert_approx_eq::<f32>(
-                &lhs_grad_custom.into_data().convert::<f32>(),
-                Tolerance::default(),
-            );
+        assert_tensor_close(
+            "kernels/template/matmul_add_relu/backward/lhs",
+            lhs_grad_custom,
+            lhs_grad_ref,
+            TOLERANCE,
+        );
 
         println!("Both reference and the custom fused kernel have the same lhs gradient");
 
-        rhs_grad_ref
-            .into_data()
-            .convert::<f32>()
-            .assert_approx_eq::<f32>(
-                &rhs_grad_custom.into_data().convert::<f32>(),
-                Tolerance::default(),
-            );
+        assert_tensor_close(
+            "kernels/template/matmul_add_relu/backward/rhs",
+            rhs_grad_custom,
+            rhs_grad_ref,
+            TOLERANCE,
+        );
 
         println!("Both reference and the custom fused kernel have the same rhs gradient");
 
-        bias_grad_ref
-            .into_data()
-            .convert::<f32>()
-            .assert_approx_eq::<f32>(
-                &bias_grad_custom.into_data().convert::<f32>(),
-                Tolerance::default(),
-            );
+        assert_tensor_close(
+            "kernels/template/matmul_add_relu/backward/bias",
+            bias_grad_custom,
+            bias_grad_ref,
+            TOLERANCE,
+        );
 
         println!("Both reference and the custom fused kernel have the same bias gradient");
     }

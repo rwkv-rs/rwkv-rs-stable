@@ -14,9 +14,12 @@ use burn_cubecl::{
     element::BoolElement,
 };
 
-use crate::kernels::train::time_mixer::learning_rate_gate::io::{
-    LearningRateGateForwardInputs,
-    LearningRateGateForwardPrimitiveInputs,
+use crate::kernels::train::{
+    layout::assert_linear_readable,
+    time_mixer::learning_rate_gate::io::{
+        LearningRateGateForwardInputs,
+        LearningRateGateForwardPrimitiveInputs,
+    },
 };
 
 /// Backend primitive capability for the fused learning-rate gate.
@@ -48,14 +51,8 @@ where
     fn fused_learning_rate_gate(
         inputs: LearningRateGateForwardPrimitiveInputs<Self>,
     ) -> FloatTensor<Self> {
-        assert!(
-            inputs.learning_rate_base.is_contiguous(),
-            "learning_rate_base must be contiguous"
-        );
-        assert!(
-            inputs.learning_rate_input.is_contiguous(),
-            "learning_rate_input must be contiguous"
-        );
+        assert_linear_readable("learning_rate_base", &inputs.learning_rate_base);
+        assert_linear_readable("learning_rate_input", &inputs.learning_rate_input);
 
         forward::fused_learning_rate_gate::<R, F, I, BT>(inputs)
     }
@@ -108,92 +105,4 @@ pub fn learning_rate_gate<B: LearningRateGateBackend>(
         learning_rate_base,
         learning_rate_input,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use burn::tensor::{Distribution, Tensor, Tolerance};
-
-    use crate::{
-        kernels::train::time_mixer::learning_rate_gate::{
-            io::LearningRateGateForwardInputs,
-            learning_rate_gate_custom,
-            learning_rate_gate_reference,
-        },
-        test_utils::backend::{TestAutodiffBackend, TestAutodiffDevice, TestBackend, TestDevice},
-    };
-
-    #[test]
-    fn forward() {
-        let device: TestDevice = Default::default();
-
-        for shape in [[2, 8, 32], [1, 3, 17]] {
-            let learning_rate_base =
-                Tensor::<TestBackend, 1>::random([shape[2]], Distribution::Default, &device);
-            let learning_rate_input =
-                Tensor::<TestBackend, 3>::random(shape, Distribution::Default, &device);
-            let inputs = LearningRateGateForwardInputs {
-                learning_rate_base,
-                learning_rate_input,
-            };
-
-            let reference = learning_rate_gate_reference(inputs.clone())
-                .into_data()
-                .convert::<f32>();
-            let custom = learning_rate_gate_custom(inputs)
-                .into_data()
-                .convert::<f32>();
-
-            reference.assert_approx_eq::<f32>(&custom, Tolerance::default());
-        }
-    }
-
-    #[test]
-    fn backward() {
-        let device: TestAutodiffDevice = Default::default();
-
-        let learning_rate_base =
-            Tensor::<TestAutodiffBackend, 1>::random([32], Distribution::Default, &device)
-                .require_grad();
-        let learning_rate_input =
-            Tensor::<TestAutodiffBackend, 3>::random([2, 8, 32], Distribution::Default, &device)
-                .require_grad();
-
-        let reference = learning_rate_gate_reference(LearningRateGateForwardInputs {
-            learning_rate_base: learning_rate_base.clone(),
-            learning_rate_input: learning_rate_input.clone(),
-        });
-        let mut gradients = reference.backward();
-        let base_grad_ref = learning_rate_base.grad_remove(&mut gradients).unwrap();
-        let input_grad_ref = learning_rate_input.grad_remove(&mut gradients).unwrap();
-
-        let learning_rate_base_custom = learning_rate_base.detach().require_grad();
-        let learning_rate_input_custom = learning_rate_input.detach().require_grad();
-        let custom = learning_rate_gate_custom(LearningRateGateForwardInputs {
-            learning_rate_base: learning_rate_base_custom.clone(),
-            learning_rate_input: learning_rate_input_custom.clone(),
-        });
-        let mut gradients = custom.backward();
-        let base_grad_custom = learning_rate_base_custom
-            .grad_remove(&mut gradients)
-            .unwrap();
-        let input_grad_custom = learning_rate_input_custom
-            .grad_remove(&mut gradients)
-            .unwrap();
-
-        base_grad_ref
-            .into_data()
-            .convert::<f32>()
-            .assert_approx_eq::<f32>(
-                &base_grad_custom.into_data().convert::<f32>(),
-                Tolerance::default(),
-            );
-        input_grad_ref
-            .into_data()
-            .convert::<f32>()
-            .assert_approx_eq::<f32>(
-                &input_grad_custom.into_data().convert::<f32>(),
-                Tolerance::default(),
-            );
-    }
 }

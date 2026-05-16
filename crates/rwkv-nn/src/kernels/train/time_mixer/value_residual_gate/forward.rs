@@ -1,44 +1,60 @@
-use burn::tensor::{DType, ops::FloatTensor};
+use burn::tensor::{ops::FloatTensor, DType};
 use burn_cubecl::{
+    cubecl::{
+        calculate_cube_count_elemwise,
+        prelude::*,
+        tensor_vector_size_parallel,
+        tune::{anchor, local_tuner, AutotuneKey, LocalTuner, Tunable, TunableSet, TuneGroup},
+    },
+    element::BoolElement,
+    ops::numeric::empty_device,
+    tensor::CubeTensor,
     CubeBackend,
     CubeElement,
     CubeRuntime,
     CubeTuneId,
     FloatElement,
     IntElement,
-    cubecl::{
-        calculate_cube_count_elemwise,
-        prelude::*,
-        tensor_vector_size_parallel,
-        tune::{AutotuneKey, LocalTuner, Tunable, TunableSet, TuneGroup, anchor, local_tuner},
-    },
-    element::BoolElement,
-    ops::numeric::empty_device,
-    tensor::CubeTensor,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::kernels::train::time_mixer::value_residual_gate::{
-    io::ValueResidualGateForwardPrimitiveInputs,
-    kernel::value_residual_gate_forward_kernel,
+use crate::kernels::train::{
+    layout::CubeHardwareFingerprint,
+    time_mixer::value_residual_gate::{
+        io::ValueResidualGateForwardPrimitiveInputs,
+        kernel::value_residual_gate_forward_kernel,
+    },
 };
 
 const LINE_SIZE_CANDIDATES: [usize; 7] = [1, 2, 4, 8, 16, 32, 64];
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
 struct ValueResidualGateForwardAutotuneKey {
+    runtime: String,
     dtype: DType,
     num_elements: usize,
     embedded_dim: usize,
+    rows: usize,
+    hardware: CubeHardwareFingerprint,
     max_line_size: usize,
+    is_in_place: bool,
+    deterministic: bool,
 }
 
 impl core::fmt::Display for ValueResidualGateForwardAutotuneKey {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
-            "{:?}:{}:{}:{}",
-            self.dtype, self.num_elements, self.embedded_dim, self.max_line_size
+            "{}:{:?}:n{}:d{}:r{}:{}:line{}:inplace{}:det{}",
+            self.runtime,
+            self.dtype,
+            self.num_elements,
+            self.embedded_dim,
+            self.rows,
+            self.hardware,
+            self.max_line_size,
+            self.is_in_place,
+            self.deterministic
         )
     }
 }
@@ -68,15 +84,25 @@ pub(crate) fn fused_value_residual_gate<
         CubeTensor<R>,
     )| {
         let shape = value.meta.shape();
+        let embedded_dim = shape[2];
+        let hardware = CubeHardwareFingerprint::from_hardware(&value.client.properties().hardware);
 
         ValueResidualGateForwardAutotuneKey {
+            runtime: R::name(&value.client).to_owned(),
             dtype: value.dtype,
             num_elements: anchor(shape.num_elements(), None, Some(1), None),
-            embedded_dim: shape[2],
-            max_line_size: max_line_size_many(
-                &[value, value_from_first_cell, gate_base, gate_input],
+            embedded_dim,
+            rows: anchor(shape.num_elements() / embedded_dim, None, Some(1), None),
+            hardware,
+            max_line_size: max_line_size_value_residual(
+                value,
+                value_from_first_cell,
+                gate_base,
+                gate_input,
                 shape.num_dims() - 1,
             ),
+            is_in_place: false,
+            deterministic: true,
         }
     };
 
@@ -143,10 +169,10 @@ pub(crate) fn fused_value_residual_gate<
 mod fusion_impl {
     use burn::tensor::{Element, Shape};
     use burn_fusion::{
+        stream::{Operation, OperationStreams},
         Fusion,
         FusionBackend,
         FusionRuntime,
-        stream::{Operation, OperationStreams},
     };
     use burn_ir::{CustomOpIr, HandleContainer, OperationIr, TensorIr};
 
@@ -304,6 +330,27 @@ fn max_line_size_many<R: CubeRuntime>(tensors: &[&CubeTensor<R>], axis: usize) -
         .min()
         .unwrap_or(1)
         .max(1)
+}
+
+fn max_line_size_value_residual<R: CubeRuntime>(
+    value: &CubeTensor<R>,
+    value_from_first_cell: &CubeTensor<R>,
+    gate_base: &CubeTensor<R>,
+    gate_input: &CubeTensor<R>,
+    embedded_axis: usize,
+) -> usize {
+    let tensor_line_size =
+        max_line_size_many(&[value, value_from_first_cell, gate_input], embedded_axis);
+    let gate_base_line_size = tensor_vector_size_parallel(
+        gate_base
+            .client
+            .io_optimized_vector_sizes(gate_base.dtype.size()),
+        gate_base.meta.shape(),
+        gate_base.meta.strides(),
+        0,
+    );
+
+    tensor_line_size.min(gate_base_line_size).max(1)
 }
 
 fn max_address_type<R: CubeRuntime>(tensors: &[&CubeTensor<R>]) -> AddressType {

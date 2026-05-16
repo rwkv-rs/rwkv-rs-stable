@@ -10,8 +10,15 @@ pub mod cells;
 pub mod functions;
 /// Custom fused kernel contracts and reference wrappers.
 pub mod kernels;
-mod layers;
-mod modules;
+/// Reusable neural-network layers.
+#[doc(hidden)]
+pub mod layers;
+/// RWKV model assemblies built from the crate's reusable layers and modules.
+pub mod models;
+/// Reusable RWKV neural-network modules.
+#[doc(hidden)]
+pub mod modules;
 
-/// Test backends and devices used by crate-local tests.
+/// Test backends and devices used by template kernel tests.
+#[cfg(test)]
 pub mod test_utils;

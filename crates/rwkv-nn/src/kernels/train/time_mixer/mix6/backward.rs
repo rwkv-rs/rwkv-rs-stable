@@ -8,14 +8,14 @@
 )))]
 mod fallback {
     use burn::{
-        backend::autodiff::{Autodiff, checkpoint::strategy::CheckpointStrategy},
-        tensor::{Tensor, TensorPrimitive, ops::FloatTensor},
+        backend::autodiff::{checkpoint::strategy::CheckpointStrategy, Autodiff},
+        tensor::{ops::FloatTensor, Tensor, TensorPrimitive},
     };
 
     use crate::kernels::train::time_mixer::mix6::{
-        Mix6Backend,
         io::{Mix6ForwardInputs, Mix6ForwardPrimitiveInputs, Mix6ForwardPrimitiveOutput},
         mix6_reference,
+        Mix6Backend,
     };
 
     impl<B, C> Mix6Backend for Autodiff<B, C>
@@ -69,65 +69,69 @@ mod fallback {
 mod cube_impl {
     use burn::{
         backend::autodiff::{
-            Autodiff,
             checkpoint::{base::Checkpointer, strategy::CheckpointStrategy},
             grads::Gradients,
             ops::{Backward, Ops, OpsKind},
+            Autodiff,
         },
         tensor::{
+            ops::{FloatTensor, FloatTensorOps},
             Shape,
             Slice,
             Tensor,
             TensorMetadata,
             TensorPrimitive,
-            ops::{FloatTensor, FloatTensorOps},
         },
     };
     use burn_cubecl::{
-        CubeBackend,
-        CubeElement,
-        CubeRuntime,
-        CubeTuneId,
-        FloatElement,
-        IntElement,
         cubecl::{
-            CubeCount,
-            CubeDim,
             calculate_cube_count_elemwise,
             prelude::*,
             tensor_vector_size_parallel,
             tune::{
+                anchor,
+                local_tuner,
                 AutotuneKey,
                 AutotuneOutput,
                 LocalTuner,
                 Tunable,
                 TunableSet,
                 TuneGroup,
-                anchor,
-                local_tuner,
             },
+            CubeCount,
+            CubeDim,
         },
         element::BoolElement,
         ops::numeric::{empty_device, zeros_client},
         tensor::CubeTensor,
+        CubeBackend,
+        CubeElement,
+        CubeRuntime,
+        CubeTuneId,
+        FloatElement,
+        IntElement,
     };
     use serde::{Deserialize, Serialize};
 
-    use crate::kernels::train::time_mixer::mix6::{
-        Mix6Backend,
-        io::{Mix6ForwardInputs, Mix6ForwardPrimitiveInputs, Mix6ForwardPrimitiveOutput},
-        kernel::{
-            Mix6BackwardFinalizeInputsLaunch,
-            Mix6BackwardFinalizeOutputsLaunch,
-            Mix6BackwardInputsLaunch,
-            Mix6BackwardOutputsLaunch,
-            Mix6ForwardInputsLaunch,
-            Mix6StackedForwardOutputLaunch,
-            mix6_backward_finalize_kernel,
-            mix6_backward_partial_kernel,
-            mix6_stacked_forward_kernel,
+    use crate::kernels::train::{
+        layout::{assert_linear_readable, CubeHardwareFingerprint},
+        time_mixer::mix6::{
+            io::{Mix6ForwardInputs, Mix6ForwardPrimitiveInputs, Mix6ForwardPrimitiveOutput},
+            kernel::{
+                mix6_backward_finalize_kernel,
+                mix6_backward_partial_kernel,
+                mix6_stacked_forward_kernel,
+                Mix6BackwardFinalizeInputsLaunch,
+                Mix6BackwardFinalizeOutputsLaunch,
+                Mix6BackwardInputsLaunch,
+                Mix6BackwardOutputsLaunch,
+                Mix6ForwardInputsLaunch,
+                Mix6StackedForwardOutputLaunch,
+            },
+            mix6_reference,
+            Mix6Backend,
+            Mix6StackedBackend,
         },
-        mix6_reference,
     };
 
     impl<R, F, I, BT, C> Mix6Backend for Autodiff<CubeBackend<R, F, I, BT>, C>
@@ -141,93 +145,18 @@ mod cube_impl {
         fn fused_mix6(
             inputs: Mix6ForwardPrimitiveInputs<Self>,
         ) -> Mix6ForwardPrimitiveOutput<Self> {
-            #[derive(Debug)]
-            struct FusedMix6Backward;
+            let [batch_size, context_len, embedded_dim] = inputs.embedded_context.shape().dims();
+            if inputs.embedded_context.shape().num_elements() == 0 {
+                let Mix6ForwardPrimitiveInputs {
+                    embedded_context,
+                    receptance_scale,
+                    weight_decay_scale,
+                    key_scale,
+                    value_scale,
+                    learning_rate_scale,
+                    gate_scale,
+                } = inputs;
 
-            impl<R, F, I, BT> Backward<CubeBackend<R, F, I, BT>, 7> for FusedMix6Backward
-            where
-                R: CubeRuntime,
-                F: FloatElement + CubeElement,
-                I: IntElement,
-                BT: BoolElement,
-            {
-                type State = Mix6BackwardState<CubeBackend<R, F, I, BT>>;
-
-                fn backward(
-                    self,
-                    ops: Ops<Self::State, 7>,
-                    grads: &mut Gradients,
-                    _checkpointer: &mut Checkpointer,
-                ) {
-                    let [
-                        node_embedded_context,
-                        node_receptance_scale,
-                        node_weight_decay_scale,
-                        node_key_scale,
-                        node_value_scale,
-                        node_learning_rate_scale,
-                        node_gate_scale,
-                    ] = ops.parents;
-                    let output_grad = grads.consume::<CubeBackend<R, F, I, BT>>(&ops.node);
-                    let grads_out = mix6_backward::<R, F, I, BT>(output_grad, ops.state);
-
-                    if let Some(node) = node_embedded_context {
-                        grads.register::<CubeBackend<R, F, I, BT>>(
-                            node.id,
-                            grads_out.embedded_context_grad,
-                        );
-                    }
-                    if let Some(node) = node_receptance_scale {
-                        grads.register::<CubeBackend<R, F, I, BT>>(
-                            node.id,
-                            grads_out.receptance_scale_grad,
-                        );
-                    }
-                    if let Some(node) = node_weight_decay_scale {
-                        grads.register::<CubeBackend<R, F, I, BT>>(
-                            node.id,
-                            grads_out.weight_decay_scale_grad,
-                        );
-                    }
-                    if let Some(node) = node_key_scale {
-                        grads.register::<CubeBackend<R, F, I, BT>>(
-                            node.id,
-                            grads_out.key_scale_grad,
-                        );
-                    }
-                    if let Some(node) = node_value_scale {
-                        grads.register::<CubeBackend<R, F, I, BT>>(
-                            node.id,
-                            grads_out.value_scale_grad,
-                        );
-                    }
-                    if let Some(node) = node_learning_rate_scale {
-                        grads.register::<CubeBackend<R, F, I, BT>>(
-                            node.id,
-                            grads_out.learning_rate_scale_grad,
-                        );
-                    }
-                    if let Some(node) = node_gate_scale {
-                        grads.register::<CubeBackend<R, F, I, BT>>(
-                            node.id,
-                            grads_out.gate_scale_grad,
-                        );
-                    }
-                }
-            }
-
-            let Mix6ForwardPrimitiveInputs {
-                embedded_context,
-                receptance_scale,
-                weight_decay_scale,
-                key_scale,
-                value_scale,
-                learning_rate_scale,
-                gate_scale,
-            } = inputs;
-
-            let [batch_size, context_len, embedded_dim] = embedded_context.shape().dims();
-            if embedded_context.shape().num_elements() == 0 {
                 return mix6_reference(Mix6ForwardInputs {
                     embedded_context: from_float(embedded_context),
                     receptance_scale: from_float(receptance_scale),
@@ -240,71 +169,7 @@ mod cube_impl {
                 .to_primitive();
             }
 
-            assert!(
-                embedded_context.primitive.is_contiguous(),
-                "embedded_context must be contiguous"
-            );
-            assert!(
-                receptance_scale.primitive.is_contiguous(),
-                "receptance_scale must be contiguous"
-            );
-            assert!(
-                weight_decay_scale.primitive.is_contiguous(),
-                "weight_decay_scale must be contiguous"
-            );
-            assert!(
-                key_scale.primitive.is_contiguous(),
-                "key_scale must be contiguous"
-            );
-            assert!(
-                value_scale.primitive.is_contiguous(),
-                "value_scale must be contiguous"
-            );
-            assert!(
-                learning_rate_scale.primitive.is_contiguous(),
-                "learning_rate_scale must be contiguous"
-            );
-            assert!(
-                gate_scale.primitive.is_contiguous(),
-                "gate_scale must be contiguous"
-            );
-
-            let parents = [
-                embedded_context.node.clone(),
-                receptance_scale.node.clone(),
-                weight_decay_scale.node.clone(),
-                key_scale.node.clone(),
-                value_scale.node.clone(),
-                learning_rate_scale.node.clone(),
-                gate_scale.node.clone(),
-            ];
-            let stacked_output = mix6_stacked_forward::<R, F, I, BT>(
-                embedded_context.primitive.clone(),
-                receptance_scale.primitive.clone(),
-                weight_decay_scale.primitive.clone(),
-                key_scale.primitive.clone(),
-                value_scale.primitive.clone(),
-                learning_rate_scale.primitive.clone(),
-                gate_scale.primitive.clone(),
-            );
-            let state = Mix6BackwardState {
-                embedded_context: embedded_context.primitive,
-                receptance_scale: receptance_scale.primitive,
-                weight_decay_scale: weight_decay_scale.primitive,
-                key_scale: key_scale.primitive,
-                value_scale: value_scale.primitive,
-                learning_rate_scale: learning_rate_scale.primitive,
-                gate_scale: gate_scale.primitive,
-            };
-
-            let stacked_output = match FusedMix6Backward
-                .prepare::<C>(parents)
-                .compute_bound()
-                .stateful()
-            {
-                OpsKind::Tracked(prep) => prep.finish(state, stacked_output),
-                OpsKind::UnTracked(prep) => prep.finish(stacked_output),
-            };
+            let stacked_output = fused_mix6_stacked_autodiff::<R, F, I, BT, C>(inputs);
             let shape = [batch_size, context_len, embedded_dim];
 
             Mix6ForwardPrimitiveOutput {
@@ -323,6 +188,148 @@ mod cube_impl {
                 ),
                 gate_input: slice_branch::<R, F, I, BT, C>(stacked_output, 5, shape),
             }
+        }
+    }
+
+    impl<R, F, I, BT, C> Mix6StackedBackend for Autodiff<CubeBackend<R, F, I, BT>, C>
+    where
+        R: CubeRuntime,
+        F: FloatElement + CubeElement,
+        I: IntElement,
+        BT: BoolElement,
+        C: CheckpointStrategy,
+    {
+        fn fused_mix6_stacked(inputs: Mix6ForwardPrimitiveInputs<Self>) -> FloatTensor<Self> {
+            fused_mix6_stacked_autodiff::<R, F, I, BT, C>(inputs)
+        }
+    }
+
+    #[derive(Debug)]
+    struct FusedMix6Backward;
+
+    impl<R, F, I, BT> Backward<CubeBackend<R, F, I, BT>, 7> for FusedMix6Backward
+    where
+        R: CubeRuntime,
+        F: FloatElement + CubeElement,
+        I: IntElement,
+        BT: BoolElement,
+    {
+        type State = Mix6BackwardState<CubeBackend<R, F, I, BT>>;
+
+        fn backward(
+            self,
+            ops: Ops<Self::State, 7>,
+            grads: &mut Gradients,
+            _checkpointer: &mut Checkpointer,
+        ) {
+            let [node_embedded_context, node_receptance_scale, node_weight_decay_scale, node_key_scale, node_value_scale, node_learning_rate_scale, node_gate_scale] =
+                ops.parents;
+            let output_grad = grads.consume::<CubeBackend<R, F, I, BT>>(&ops.node);
+            let grads_out = mix6_backward::<R, F, I, BT>(output_grad, ops.state);
+
+            if let Some(node) = node_embedded_context {
+                grads
+                    .register::<CubeBackend<R, F, I, BT>>(node.id, grads_out.embedded_context_grad);
+            }
+            if let Some(node) = node_receptance_scale {
+                grads
+                    .register::<CubeBackend<R, F, I, BT>>(node.id, grads_out.receptance_scale_grad);
+            }
+            if let Some(node) = node_weight_decay_scale {
+                grads.register::<CubeBackend<R, F, I, BT>>(
+                    node.id,
+                    grads_out.weight_decay_scale_grad,
+                );
+            }
+            if let Some(node) = node_key_scale {
+                grads.register::<CubeBackend<R, F, I, BT>>(node.id, grads_out.key_scale_grad);
+            }
+            if let Some(node) = node_value_scale {
+                grads.register::<CubeBackend<R, F, I, BT>>(node.id, grads_out.value_scale_grad);
+            }
+            if let Some(node) = node_learning_rate_scale {
+                grads.register::<CubeBackend<R, F, I, BT>>(
+                    node.id,
+                    grads_out.learning_rate_scale_grad,
+                );
+            }
+            if let Some(node) = node_gate_scale {
+                grads.register::<CubeBackend<R, F, I, BT>>(node.id, grads_out.gate_scale_grad);
+            }
+        }
+    }
+
+    fn fused_mix6_stacked_autodiff<R, F, I, BT, C>(
+        inputs: Mix6ForwardPrimitiveInputs<Autodiff<CubeBackend<R, F, I, BT>, C>>,
+    ) -> FloatTensor<Autodiff<CubeBackend<R, F, I, BT>, C>>
+    where
+        R: CubeRuntime,
+        F: FloatElement + CubeElement,
+        I: IntElement,
+        BT: BoolElement,
+        C: CheckpointStrategy,
+    {
+        let Mix6ForwardPrimitiveInputs {
+            embedded_context,
+            receptance_scale,
+            weight_decay_scale,
+            key_scale,
+            value_scale,
+            learning_rate_scale,
+            gate_scale,
+        } = inputs;
+
+        assert_linear_readable("embedded_context", &embedded_context.primitive);
+        assert_linear_readable("receptance_scale", &receptance_scale.primitive);
+        assert_linear_readable("weight_decay_scale", &weight_decay_scale.primitive);
+        assert_linear_readable("key_scale", &key_scale.primitive);
+        assert_linear_readable("value_scale", &value_scale.primitive);
+        assert_linear_readable("learning_rate_scale", &learning_rate_scale.primitive);
+        assert_linear_readable("gate_scale", &gate_scale.primitive);
+
+        let embedded_context_primitive = embedded_context.primitive.clone();
+        let receptance_scale_primitive = receptance_scale.primitive.clone();
+        let weight_decay_scale_primitive = weight_decay_scale.primitive.clone();
+        let key_scale_primitive = key_scale.primitive.clone();
+        let value_scale_primitive = value_scale.primitive.clone();
+        let learning_rate_scale_primitive = learning_rate_scale.primitive.clone();
+        let gate_scale_primitive = gate_scale.primitive.clone();
+
+        let parents = [
+            embedded_context.node.clone(),
+            receptance_scale.node.clone(),
+            weight_decay_scale.node.clone(),
+            key_scale.node.clone(),
+            value_scale.node.clone(),
+            learning_rate_scale.node.clone(),
+            gate_scale.node.clone(),
+        ];
+        let stacked_output = mix6_stacked_forward::<R, F, I, BT>(
+            embedded_context_primitive.clone(),
+            receptance_scale_primitive.clone(),
+            weight_decay_scale_primitive.clone(),
+            key_scale_primitive.clone(),
+            value_scale_primitive.clone(),
+            learning_rate_scale_primitive.clone(),
+            gate_scale_primitive.clone(),
+        );
+        let state = Mix6BackwardState {
+            embedded_context: embedded_context_primitive,
+            receptance_scale: receptance_scale_primitive,
+            weight_decay_scale: weight_decay_scale_primitive,
+            key_scale: key_scale_primitive,
+            value_scale: value_scale_primitive,
+            learning_rate_scale: learning_rate_scale_primitive,
+            gate_scale: gate_scale_primitive,
+        };
+
+        match FusedMix6Backward
+            .prepare::<C>(parents)
+            .compute_bound()
+            .stateful()
+        {
+            OpsKind::Tracked(prep) => prep.finish(state, stacked_output),
+            OpsKind::UnTracked(prep) => prep.finish(stacked_output),
         }
     }
 
@@ -504,32 +511,14 @@ mod cube_impl {
             gate_scale,
         } = state;
 
-        assert!(
-            output_grad.is_contiguous(),
-            "output_grad must be contiguous"
-        );
-        assert!(
-            embedded_context.is_contiguous(),
-            "embedded_context must be contiguous"
-        );
-        assert!(
-            receptance_scale.is_contiguous(),
-            "receptance_scale must be contiguous"
-        );
-        assert!(
-            weight_decay_scale.is_contiguous(),
-            "weight_decay_scale must be contiguous"
-        );
-        assert!(key_scale.is_contiguous(), "key_scale must be contiguous");
-        assert!(
-            value_scale.is_contiguous(),
-            "value_scale must be contiguous"
-        );
-        assert!(
-            learning_rate_scale.is_contiguous(),
-            "learning_rate_scale must be contiguous"
-        );
-        assert!(gate_scale.is_contiguous(), "gate_scale must be contiguous");
+        assert_linear_readable("output_grad", &output_grad);
+        assert_linear_readable("embedded_context", &embedded_context);
+        assert_linear_readable("receptance_scale", &receptance_scale);
+        assert_linear_readable("weight_decay_scale", &weight_decay_scale);
+        assert_linear_readable("key_scale", &key_scale);
+        assert_linear_readable("value_scale", &value_scale);
+        assert_linear_readable("learning_rate_scale", &learning_rate_scale);
+        assert_linear_readable("gate_scale", &gate_scale);
 
         let client = embedded_context.client.clone();
         let key = |(
@@ -552,12 +541,17 @@ mod cube_impl {
             CubeTensor<R>,
         )| {
             let shape = embedded_context.meta.shape();
+            let hardware = CubeHardwareFingerprint::from_hardware(
+                &embedded_context.client.properties().hardware,
+            );
 
             Mix6BackwardAutotuneKey {
+                runtime: R::name(&embedded_context.client).to_owned(),
                 dtype: embedded_context.dtype,
                 num_elements: anchor(shape.num_elements(), None, Some(1), None),
-                embedded_dim: shape[2],
-                bt_len: anchor(shape[0] * shape[1], None, Some(1), None),
+                d_model: shape[2],
+                rows: anchor(shape[0] * shape[1], None, Some(1), None),
+                hardware,
                 max_line_size: max_line_size_backward(
                     output_grad,
                     embedded_context,
@@ -570,6 +564,8 @@ mod cube_impl {
                         gate_scale,
                     ],
                 ),
+                is_in_place: false,
+                deterministic: true,
             }
         };
 
@@ -648,7 +644,7 @@ mod cube_impl {
                                     let scale_shape = Shape::new([1, 1, embedded_dim]);
 
                                     if bt_len == 0 {
-                                        return Mix6BackwardPrimitiveOutput::<
+                                        return Ok(Mix6BackwardPrimitiveOutput::<
                                             CubeBackend<R, F, I, BT>,
                                         > {
                                             embedded_context_grad: zeros_client::<R>(
@@ -693,7 +689,7 @@ mod cube_impl {
                                                 scale_shape,
                                                 embedded_context.dtype,
                                             ),
-                                        };
+                                        });
                                     }
 
                                     let embedded_context_grad =
@@ -905,7 +901,8 @@ mod cube_impl {
                             )
                             .group(&launch_group, move |key| {
                                 if line_size <= key.max_line_size
-                                    && key.embedded_dim.is_multiple_of(line_size)
+                                    && key.d_model.is_multiple_of(line_size)
+                                    && block_size <= key.hardware.max_units_per_cube
                                 {
                                     1
                                 } else {
@@ -943,19 +940,31 @@ mod cube_impl {
 
     #[derive(Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
     struct Mix6BackwardAutotuneKey {
+        runtime: String,
         dtype: burn::tensor::DType,
         num_elements: usize,
-        embedded_dim: usize,
-        bt_len: usize,
+        d_model: usize,
+        rows: usize,
+        hardware: CubeHardwareFingerprint,
         max_line_size: usize,
+        is_in_place: bool,
+        deterministic: bool,
     }
 
     impl core::fmt::Display for Mix6BackwardAutotuneKey {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             write!(
                 f,
-                "{:?}:{}:{}:{}:{}",
-                self.dtype, self.num_elements, self.embedded_dim, self.bt_len, self.max_line_size
+                "{}:{:?}:n{}:d{}:r{}:hw{}:line{}:inplace{}:det{}",
+                self.runtime,
+                self.dtype,
+                self.num_elements,
+                self.d_model,
+                self.rows,
+                self.hardware,
+                self.max_line_size,
+                self.is_in_place,
+                self.deterministic
             )
         }
     }

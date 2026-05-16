@@ -1,48 +1,64 @@
 use burn::tensor::{
+    ops::{FloatTensor, FloatTensorOps},
     DType,
     Shape,
-    ops::{FloatTensor, FloatTensorOps},
 };
 use burn_cubecl::{
+    cubecl::{
+        calculate_cube_count_elemwise,
+        prelude::*,
+        tensor_vector_size_parallel,
+        tune::{anchor, local_tuner, AutotuneKey, LocalTuner, Tunable, TunableSet, TuneGroup},
+    },
+    element::BoolElement,
+    ops::numeric::empty_device,
+    tensor::CubeTensor,
     CubeBackend,
     CubeElement,
     CubeRuntime,
     CubeTuneId,
     FloatElement,
     IntElement,
-    cubecl::{
-        calculate_cube_count_elemwise,
-        prelude::*,
-        tensor_vector_size_parallel,
-        tune::{AutotuneKey, LocalTuner, Tunable, TunableSet, TuneGroup, anchor, local_tuner},
-    },
-    element::BoolElement,
-    ops::numeric::empty_device,
-    tensor::CubeTensor,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::kernels::train::channel_mixer::{
-    io::ChannelMixerForwardPrimitiveInputs,
-    kernel::{channel_mixer_mix_forward_kernel, channel_mixer_relu_square_forward_kernel},
+use crate::kernels::train::{
+    channel_mixer::{
+        io::ChannelMixerForwardPrimitiveInputs,
+        kernel::{channel_mixer_mix_forward_kernel, channel_mixer_relu_square_forward_kernel},
+    },
+    layout::CubeHardwareFingerprint,
 };
 
 const LINE_SIZE_CANDIDATES: [usize; 7] = [1, 2, 4, 8, 16, 32, 64];
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
 struct ChannelMixerElementwiseAutotuneKey {
+    runtime: String,
     dtype: DType,
     num_elements: usize,
+    rows: usize,
     innermost_dim: usize,
+    hardware: CubeHardwareFingerprint,
     max_line_size: usize,
+    is_in_place: bool,
+    deterministic: bool,
 }
 
 impl core::fmt::Display for ChannelMixerElementwiseAutotuneKey {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
-            "{:?}:{}:{}:{}",
-            self.dtype, self.num_elements, self.innermost_dim, self.max_line_size
+            "{}:{:?}:n{}:r{}:d{}:{}:line{}:inplace{}:det{}",
+            self.runtime,
+            self.dtype,
+            self.num_elements,
+            self.rows,
+            self.innermost_dim,
+            self.hardware,
+            self.max_line_size,
+            self.is_in_place,
+            self.deterministic
         )
     }
 }
@@ -69,15 +85,9 @@ pub(crate) fn fused_channel_mixer<
     let rows = batch_size * context_len;
     let key_input =
         CubeBackend::<R, F, I, BT>::float_reshape(key_input, Shape::new([rows, embedded_dim]));
-    let key_projection = CubeBackend::<R, F, I, BT>::float_matmul(
-        key_input,
-        CubeBackend::<R, F, I, BT>::float_transpose(key_weight),
-    );
+    let key_projection = CubeBackend::<R, F, I, BT>::float_matmul(key_input, key_weight);
     let activated_key = channel_mixer_relu_square::<R, F>(key_projection);
-    let output = CubeBackend::<R, F, I, BT>::float_matmul(
-        activated_key,
-        CubeBackend::<R, F, I, BT>::float_transpose(value_weight),
-    );
+    let output = CubeBackend::<R, F, I, BT>::float_matmul(activated_key, value_weight);
 
     CubeBackend::<R, F, I, BT>::float_reshape(
         output,
@@ -89,10 +99,10 @@ pub(crate) fn fused_channel_mixer<
 mod fusion_impl {
     use burn::tensor::{Element, Shape};
     use burn_fusion::{
+        stream::{Operation, OperationStreams},
         Fusion,
         FusionBackend,
         FusionRuntime,
-        stream::{Operation, OperationStreams},
     };
     use burn_ir::{CustomOpIr, HandleContainer, OperationIr, TensorIr};
 
@@ -111,7 +121,7 @@ mod fusion_impl {
             } = inputs;
             let client = embedded_context.client.clone();
             let [batch_size, context_len, _] = embedded_context.shape.dims();
-            let [embedded_dim, _] = value_weight.shape.dims();
+            let [_, embedded_dim] = value_weight.shape.dims();
 
             #[derive(Clone, Debug)]
             struct ChannelMixerOp<B1> {
@@ -188,12 +198,20 @@ where
 
     let key = |(embedded_context, key_scale): &(CubeTensor<R>, CubeTensor<R>)| {
         let shape = embedded_context.meta.shape();
+        let innermost_dim = shape[shape.num_dims() - 1];
+        let hardware =
+            CubeHardwareFingerprint::from_hardware(&embedded_context.client.properties().hardware);
 
         ChannelMixerElementwiseAutotuneKey {
+            runtime: R::name(&embedded_context.client).to_owned(),
             dtype: embedded_context.dtype,
             num_elements: anchor(shape.num_elements(), None, Some(1), None),
-            innermost_dim: shape[shape.num_dims() - 1],
+            rows: anchor(shape.num_elements() / innermost_dim, None, Some(1), None),
+            innermost_dim,
+            hardware,
             max_line_size: max_line_size_many(&[embedded_context, key_scale], shape.num_dims() - 1),
+            is_in_place: false,
+            deterministic: true,
         }
     };
 
@@ -303,12 +321,20 @@ where
 
     let key = |pre_activation: &CubeTensor<R>| {
         let shape = pre_activation.meta.shape();
+        let innermost_dim = shape[shape.num_dims() - 1];
+        let hardware =
+            CubeHardwareFingerprint::from_hardware(&pre_activation.client.properties().hardware);
 
         ChannelMixerElementwiseAutotuneKey {
+            runtime: R::name(&pre_activation.client).to_owned(),
             dtype: pre_activation.dtype,
             num_elements: anchor(shape.num_elements(), None, Some(1), None),
-            innermost_dim: shape[shape.num_dims() - 1],
+            rows: anchor(shape.num_elements() / innermost_dim, None, Some(1), None),
+            innermost_dim,
+            hardware,
             max_line_size: max_line_size_many(&[pre_activation], shape.num_dims() - 1),
+            is_in_place: pre_activation.can_mut() && pre_activation.is_nonoverlapping(),
+            deterministic: true,
         }
     };
 
@@ -364,17 +390,14 @@ where
 {
     let shape = pre_activation.meta.shape().clone();
     let client = pre_activation.client.clone();
-    let activated_key =
-        empty_device::<R, F>(client.clone(), pre_activation.device.clone(), shape.clone());
 
     if shape.num_elements() == 0 {
-        return activated_key;
+        return pre_activation;
     }
 
     let working_units = shape.num_elements() / vector_size;
     let cube_dim = CubeDim::new(&client, working_units);
     let cube_count = calculate_cube_count_elemwise(&client, working_units, cube_dim);
-    let address_type = max_address_type(&[&pre_activation, &activated_key]);
 
     // ReLU-square has one independent output per key projection element. Vectorizing along the
     // expanded dimension keeps the projected activation reads and writes contiguous. Live state is
@@ -382,18 +405,35 @@ where
     // SAFETY: The input is contiguous and the tuner only keeps vector sizes that divide the
     // innermost expanded dimension, so vector views cover the logical element range.
     unsafe {
-        channel_mixer_relu_square_forward_kernel::launch_unchecked::<F, R>(
-            &client,
-            cube_count,
-            cube_dim,
-            address_type,
-            vector_size,
-            pre_activation.into_linear_view_like(&activated_key),
-            activated_key.clone().into_linear_view(),
-        );
-    }
+        if pre_activation.can_mut() && pre_activation.is_nonoverlapping() {
+            channel_mixer_relu_square_forward_kernel::launch_unchecked::<F, R>(
+                &client,
+                cube_count,
+                cube_dim,
+                max_address_type(&[&pre_activation]),
+                vector_size,
+                pre_activation.clone().into_linear_view(),
+                pre_activation.as_linear_view_alias(0),
+            );
 
-    activated_key
+            pre_activation
+        } else {
+            let activated_key =
+                empty_device::<R, F>(client.clone(), pre_activation.device.clone(), shape);
+
+            channel_mixer_relu_square_forward_kernel::launch_unchecked::<F, R>(
+                &client,
+                cube_count,
+                cube_dim,
+                max_address_type(&[&pre_activation, &activated_key]),
+                vector_size,
+                pre_activation.into_linear_view_like(&activated_key),
+                activated_key.clone().into_linear_view(),
+            );
+
+            activated_key
+        }
+    }
 }
 
 fn max_line_size_many<R: CubeRuntime>(tensors: &[&CubeTensor<R>], axis: usize) -> usize {

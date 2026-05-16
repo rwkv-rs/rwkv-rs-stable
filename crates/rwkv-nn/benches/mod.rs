@@ -35,6 +35,14 @@ pub fn device<B: Backend>() -> B::Device {
     B::Device::default()
 }
 
+#[cfg(feature = "bench-tracy")]
+pub fn enter_profile_span(name: &'static str) -> tracing::span::EnteredSpan {
+    tracing::info_span!("rwkv_nn_bench", case = name).entered()
+}
+
+#[cfg(not(feature = "bench-tracy"))]
+pub fn enter_profile_span(_name: &'static str) {}
+
 pub fn print_speedup_summary<B, Custom, Baseline>(
     name: &str,
     batch_size: usize,
@@ -46,15 +54,85 @@ pub fn print_speedup_summary<B, Custom, Baseline>(
     Custom: FnMut(),
     Baseline: FnMut(),
 {
-    let custom_ns = measure_average_ns::<B, _>(device, &mut custom);
-    let baseline_ns = measure_average_ns::<B, _>(device, &mut baseline);
-    let speedup = baseline_ns / custom_ns;
+    #[cfg(feature = "bench-profile")]
+    {
+        let _ = (name, batch_size, device);
+        let _ = (&mut custom, &mut baseline);
+    }
 
-    println!(
-        "[speedup] {name}/{batch_size}: custom={:.3} ms baseline={:.3} ms speedup={speedup:.2}x",
-        custom_ns / 1_000_000.0,
-        baseline_ns / 1_000_000.0,
-    );
+    #[cfg(not(feature = "bench-profile"))]
+    {
+        if !matches_criterion_filter(name, batch_size) {
+            return;
+        }
+
+        let custom_ns = measure_average_ns::<B, _>(device, &mut custom);
+        let baseline_ns = measure_average_ns::<B, _>(device, &mut baseline);
+        let speedup = baseline_ns / custom_ns;
+
+        println!(
+            "[speedup] {name}/{batch_size}: custom={:.3} ms baseline={:.3} ms speedup={speedup:.2}x",
+            custom_ns / 1_000_000.0,
+            baseline_ns / 1_000_000.0,
+        );
+    }
+}
+
+#[cfg(not(feature = "bench-profile"))]
+fn matches_criterion_filter(name: &str, batch_size: usize) -> bool {
+    let Some(filter) = criterion_filter() else {
+        return true;
+    };
+
+    if filter.is_empty() {
+        return true;
+    }
+
+    format!("{name}/{batch_size}").contains(&filter)
+}
+
+#[cfg(not(feature = "bench-profile"))]
+fn criterion_filter() -> Option<String> {
+    let mut args = std::env::args().skip(1);
+    let mut filter = None;
+
+    while let Some(arg) = args.next() {
+        if arg == "--bench" {
+            continue;
+        }
+
+        if option_takes_value(&arg) {
+            args.next();
+            continue;
+        }
+
+        if arg.starts_with('-') {
+            continue;
+        }
+
+        filter = Some(arg);
+    }
+
+    filter
+}
+
+#[cfg(not(feature = "bench-profile"))]
+fn option_takes_value(arg: &str) -> bool {
+    matches!(
+        arg,
+        "--baseline"
+            | "--confidence-level"
+            | "--measurement-time"
+            | "--noise-threshold"
+            | "--nresamples"
+            | "--output-format"
+            | "--plotting-backend"
+            | "--profile-time"
+            | "--sample-size"
+            | "--save-baseline"
+            | "--significance-level"
+            | "--warm-up-time"
+    )
 }
 
 fn measure_average_ns<B, Work>(device: &B::Device, work: &mut Work) -> f64

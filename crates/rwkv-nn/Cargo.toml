@@ -27,10 +27,12 @@ harness = false
 [features]
 default = []
 trace = ["dep:tracing"]
+bench-profile = []
+bench-tracy = ["bench-profile", "dep:tracing"]
 autotune = ["burn-cubecl/autotune"]
 autotune-checks = ["autotune", "burn-cubecl/autotune-checks"]
-fusion = ["dep:burn-fusion", "burn-cubecl/fusion"]
-cpu = []
+fusion = ["burn/fusion", "dep:burn-fusion", "burn-cubecl/fusion"]
+cpu = ["burn/cpu"]
 wgpu = ["burn/wgpu"]
 webgpu = ["wgpu", "burn/webgpu"]
 vulkan = ["wgpu", "burn/vulkan"]
@@ -40,13 +42,13 @@ rocm = ["burn/rocm"]
 
 [dependencies]
 # === Log & Trace ===
-tracing = { workspace = true, optional = true }
+tracing = { workspace = true, features = ["attributes", "std"], optional = true }
 
 # === Exception Handling ===
 thiserror = { workspace = true }
 
 # === Deep Learning Core ===
-burn = { workspace = true, default-features = false, features = ["std", "autodiff", "cubecl", "cpu"] }
+burn = { workspace = true, default-features = false, features = ["std", "autodiff", "cubecl"] }
 burn-fusion = { workspace = true, default-features = false, features = ["std"], optional = true }
 burn-cubecl = { workspace = true, default-features = false, features = ["std"] }
 burn-ir = { workspace = true, default-features = false, features = ["std"] }
@@ -60,14 +62,14 @@ burn-ir = { workspace = true, default-features = false, features = ["std"] }
 # === File ===
 
 # === Serialization ===
-serde = { workspace = true, default-features = false }
+serde = { workspace = true, features = ["derive", "std"] }
 
 # === Local Dependencies ===
 #rwkv-config = { path = "../rwkv-config" }
 #rwkv-data = { path = "../rwkv-data" }
 
 [dev-dependencies]
-criterion = { workspace = true }
+criterion = { workspace = true, features = ["cargo_bench_support"] }
 
 [lints]
 workspace = true

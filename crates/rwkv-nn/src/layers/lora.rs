@@ -102,7 +102,7 @@ impl<B: Backend> LoRA<B> {
         }
     }
 
-    pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+    pub fn forward_without_bias(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
         // Group view operations before compute block for better fusion
         let w_a = self.w_a.val().unsqueeze_dim(0);
         let w_b = self.w_b.val().unsqueeze_dim(0);
@@ -115,8 +115,17 @@ impl<B: Backend> LoRA<B> {
             ActivationFn::NoOP => x,
         };
 
-        let x = x.matmul(w_b);
+        x.matmul(w_b)
+    }
 
+    pub fn bias_1d(&self) -> Option<Tensor<B, 1>> {
+        self.bias
+            .as_ref()
+            .map(|bias| bias.val().reshape([self.embedded_dim]))
+    }
+
+    pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+        let x = self.forward_without_bias(x);
         match &self.bias {
             Some(bias) => bias.val() + x,
             None => x,

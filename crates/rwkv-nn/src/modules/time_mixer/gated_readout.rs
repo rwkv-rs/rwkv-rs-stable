@@ -7,6 +7,11 @@ use burn::{
 
 use crate::{
     functions::init_weights::{constant_init, get_token_shift_diff_scale, zeros_init},
+    kernels::train::time_mixer::gated_readout_combine::{
+        GatedReadoutCombineBackend,
+        gated_readout_combine,
+        io::GatedReadoutCombineForwardInputs,
+    },
     layers::lora::{ActivationFn, LoRA, LoRAConfig, LoRAType},
 };
 
@@ -107,7 +112,10 @@ impl<B: Backend> GatedReadout<B> {
         feature = "trace",
         tracing::instrument(name = "rwkv.infer.model.gated_readout", skip_all)
     )]
-    pub fn forward(&self, gated_readout_input: GatedReadoutInput<B>) -> Tensor<B, 3> {
+    pub fn forward(&self, gated_readout_input: GatedReadoutInput<B>) -> Tensor<B, 3>
+    where
+        B: GatedReadoutCombineBackend,
+    {
         let GatedReadoutInput {
             gate_input,
             wkv7_forward_output,
@@ -116,30 +124,32 @@ impl<B: Backend> GatedReadout<B> {
             wkv7_forward_input_value,
         } = gated_readout_input;
 
-        let [batch_size_per_device, context_length, embedded_dim] = gate_input.dims();
-
         let gate = self.param_output_gate_lora.forward(gate_input);
 
-        let wkv7_forward_output_normalized = self
+        let norm_gamma = self
             .group_norm
-            .forward(
-                wkv7_forward_output.reshape([batch_size_per_device * context_length, embedded_dim]),
-            )
-            .reshape([batch_size_per_device, context_length, embedded_dim]);
+            .gamma
+            .as_ref()
+            .expect("gated-readout group norm requires affine gamma")
+            .val();
+        let norm_beta = self
+            .group_norm
+            .beta
+            .as_ref()
+            .expect("gated-readout group norm requires affine beta")
+            .val();
 
-        let bonus: Tensor<B, 4> = (wkv7_forward_input_receptance
-            * wkv7_forward_input_replacement_key
-            * self
-                .param_receptance_key_bonus
-                .val()
-                .unsqueeze_dims(&[0, 1]))
-        .sum_dim(3)
-            * wkv7_forward_input_value;
-
-        let bonus: Tensor<B, 3> =
-            bonus.reshape([batch_size_per_device, context_length, embedded_dim]);
-
-        let out_gated = (wkv7_forward_output_normalized + bonus) * gate;
+        let out_gated = gated_readout_combine(GatedReadoutCombineForwardInputs {
+            wkv_output: wkv7_forward_output,
+            norm_gamma,
+            norm_beta,
+            norm_epsilon: self.group_norm.epsilon,
+            gate,
+            receptance: wkv7_forward_input_receptance,
+            replacement_key: wkv7_forward_input_replacement_key,
+            value: wkv7_forward_input_value,
+            bonus: self.param_receptance_key_bonus.val(),
+        });
 
         self.projection_output.forward(out_gated)
     }

@@ -8,14 +8,14 @@
 )))]
 mod fallback {
     use burn::{
-        backend::autodiff::{Autodiff, checkpoint::strategy::CheckpointStrategy},
-        tensor::{Tensor, TensorPrimitive, ops::FloatTensor},
+        backend::autodiff::{checkpoint::strategy::CheckpointStrategy, Autodiff},
+        tensor::{ops::FloatTensor, Tensor, TensorPrimitive},
     };
 
     use crate::kernels::train::channel_mixer::{
-        ChannelMixerBackend,
         channel_mixer_reference,
         io::{ChannelMixerForwardInputs, ChannelMixerForwardPrimitiveInputs},
+        ChannelMixerBackend,
     };
 
     impl<B, C> ChannelMixerBackend for Autodiff<B, C>
@@ -63,55 +63,58 @@ mod fallback {
 mod cube_impl {
     use burn::{
         backend::autodiff::{
-            Autodiff,
             checkpoint::{base::Checkpointer, strategy::CheckpointStrategy},
             grads::Gradients,
             ops::{Backward, Ops, OpsKind},
+            Autodiff,
         },
         tensor::{
-            Shape,
             ops::{FloatTensor, FloatTensorOps},
+            Shape,
         },
     };
     use burn_cubecl::{
-        CubeBackend,
-        CubeElement,
-        CubeRuntime,
-        CubeTuneId,
-        FloatElement,
-        IntElement,
         cubecl::{
-            CubeCount,
-            CubeDim,
             calculate_cube_count_elemwise,
             prelude::*,
             tensor_vector_size_parallel,
             tune::{
+                anchor,
+                local_tuner,
                 AutotuneKey,
                 AutotuneOutput,
                 LocalTuner,
                 Tunable,
                 TunableSet,
                 TuneGroup,
-                anchor,
-                local_tuner,
             },
+            CubeCount,
+            CubeDim,
         },
         element::BoolElement,
         ops::numeric::{empty_device, zeros_client},
         tensor::CubeTensor,
+        CubeBackend,
+        CubeElement,
+        CubeRuntime,
+        CubeTuneId,
+        FloatElement,
+        IntElement,
     };
     use serde::{Deserialize, Serialize};
 
-    use crate::kernels::train::channel_mixer::{
-        ChannelMixerBackend,
-        forward,
-        io::{ChannelMixerBackwardPrimitiveOutputs, ChannelMixerForwardPrimitiveInputs},
-        kernel::{
-            channel_mixer_key_scale_reduce_finalize_kernel,
-            channel_mixer_mix_backward_partial_kernel,
-            channel_mixer_relu_square_backward_from_output_kernel,
+    use crate::kernels::train::{
+        channel_mixer::{
+            forward,
+            io::{ChannelMixerBackwardPrimitiveOutputs, ChannelMixerForwardPrimitiveInputs},
+            kernel::{
+                channel_mixer_key_scale_reduce_finalize_kernel,
+                channel_mixer_mix_backward_partial_kernel,
+                channel_mixer_relu_square_backward_from_output_kernel,
+            },
+            ChannelMixerBackend,
         },
+        layout::{assert_linear_readable, CubeHardwareFingerprint},
     };
 
     impl<R, F, I, BT, C> ChannelMixerBackend for Autodiff<CubeBackend<R, F, I, BT>, C>
@@ -143,12 +146,8 @@ mod cube_impl {
                     grads: &mut Gradients,
                     _checkpointer: &mut Checkpointer,
                 ) {
-                    let [
-                        node_embedded_context,
-                        node_key_scale,
-                        node_key_weight,
-                        node_value_weight,
-                    ] = ops.parents;
+                    let [node_embedded_context, node_key_scale, node_key_weight, node_value_weight] =
+                        ops.parents;
                     let output_grad = grads.consume::<CubeBackend<R, F, I, BT>>(&ops.node);
                     let ChannelMixerBackwardState {
                         embedded_context,
@@ -220,12 +219,12 @@ mod cube_impl {
             );
             let key_projection = CubeBackend::<R, F, I, BT>::float_matmul(
                 key_input_flat,
-                CubeBackend::<R, F, I, BT>::float_transpose(key_weight_primitive.clone()),
+                key_weight_primitive.clone(),
             );
             let activated_key = forward::channel_mixer_relu_square::<R, F>(key_projection);
             let output = CubeBackend::<R, F, I, BT>::float_matmul(
                 activated_key.clone(),
-                CubeBackend::<R, F, I, BT>::float_transpose(value_weight_primitive.clone()),
+                value_weight_primitive.clone(),
             );
             let output = CubeBackend::<R, F, I, BT>::float_reshape(
                 output,
@@ -282,28 +281,16 @@ mod cube_impl {
         key_weight: FloatTensor<CubeBackend<R, F, I, BT>>,
         value_weight: FloatTensor<CubeBackend<R, F, I, BT>>,
     ) -> ChannelMixerBackwardPrimitiveOutputs<CubeBackend<R, F, I, BT>> {
-        assert!(
-            output_grad.is_contiguous(),
-            "output_grad must be contiguous"
-        );
-        assert!(
-            embedded_context.is_contiguous(),
-            "embedded_context must be contiguous"
-        );
-        assert!(key_input.is_contiguous(), "key_input must be contiguous");
-        assert!(
-            activated_key.is_contiguous(),
-            "activated_key must be contiguous"
-        );
-        assert!(key_scale.is_contiguous(), "key_scale must be contiguous");
-        assert!(key_weight.is_contiguous(), "key_weight must be contiguous");
-        assert!(
-            value_weight.is_contiguous(),
-            "value_weight must be contiguous"
-        );
+        assert_linear_readable("output_grad", &output_grad);
+        assert_linear_readable("embedded_context", &embedded_context);
+        assert_linear_readable("key_input", &key_input);
+        assert_linear_readable("activated_key", &activated_key);
+        assert_linear_readable("key_scale", &key_scale);
+        assert_linear_readable("key_weight", &key_weight);
+        assert_linear_readable("value_weight", &value_weight);
 
         let [batch_size, context_len, embedded_dim] = output_grad.meta.shape().dims();
-        let [expanded_dim, _] = key_weight.meta.shape().dims();
+        let [_, expanded_dim] = key_weight.meta.shape().dims();
         let rows = batch_size * context_len;
 
         if rows == 0 {
@@ -326,13 +313,13 @@ mod cube_impl {
                 key_weight_grad: zeros_client::<R>(
                     client.clone(),
                     device.clone(),
-                    Shape::new([expanded_dim, embedded_dim]),
+                    Shape::new([embedded_dim, expanded_dim]),
                     output_grad.dtype,
                 ),
                 value_weight_grad: zeros_client::<R>(
                     client,
                     device,
-                    Shape::new([embedded_dim, expanded_dim]),
+                    Shape::new([expanded_dim, embedded_dim]),
                     output_grad.dtype,
                 ),
             };
@@ -343,11 +330,13 @@ mod cube_impl {
             Shape::new([rows, embedded_dim]),
         );
         let value_weight_grad = CubeBackend::<R, F, I, BT>::float_matmul(
-            CubeBackend::<R, F, I, BT>::float_transpose(output_grad_flat.clone()),
-            activated_key.clone(),
+            CubeBackend::<R, F, I, BT>::float_transpose(activated_key.clone()),
+            output_grad_flat.clone(),
         );
-        let activated_key_grad =
-            CubeBackend::<R, F, I, BT>::float_matmul(output_grad_flat, value_weight);
+        let activated_key_grad = CubeBackend::<R, F, I, BT>::float_matmul(
+            output_grad_flat,
+            CubeBackend::<R, F, I, BT>::float_transpose(value_weight),
+        );
         let key_projection_grad = channel_mixer_relu_square_backward_from_output::<R, F>(
             activated_key_grad,
             activated_key,
@@ -355,11 +344,13 @@ mod cube_impl {
         let key_input_flat =
             CubeBackend::<R, F, I, BT>::float_reshape(key_input, Shape::new([rows, embedded_dim]));
         let key_weight_grad = CubeBackend::<R, F, I, BT>::float_matmul(
-            CubeBackend::<R, F, I, BT>::float_transpose(key_projection_grad.clone()),
-            key_input_flat,
+            CubeBackend::<R, F, I, BT>::float_transpose(key_input_flat.clone()),
+            key_projection_grad.clone(),
         );
-        let mixed_grad_flat =
-            CubeBackend::<R, F, I, BT>::float_matmul(key_projection_grad, key_weight);
+        let mixed_grad_flat = CubeBackend::<R, F, I, BT>::float_matmul(
+            key_projection_grad,
+            CubeBackend::<R, F, I, BT>::float_transpose(key_weight),
+        );
         let mixed_grad = CubeBackend::<R, F, I, BT>::float_reshape(
             mixed_grad_flat,
             Shape::new([batch_size, context_len, embedded_dim]),
@@ -442,16 +433,22 @@ mod cube_impl {
             CubeTensor<R>,
         )| {
             let shape = mixed_grad.meta.shape();
+            let hardware =
+                CubeHardwareFingerprint::from_hardware(&mixed_grad.client.properties().hardware);
 
             ChannelMixerMixBackwardAutotuneKey {
+                runtime: R::name(&mixed_grad.client).to_owned(),
                 dtype: mixed_grad.dtype,
                 num_elements: anchor(shape.num_elements(), None, Some(1), None),
-                embedded_dim: shape[2],
-                bt_len: anchor(shape[0] * shape[1], None, Some(1), None),
+                d_model: shape[2],
+                rows: anchor(shape[0] * shape[1], None, Some(1), None),
+                hardware,
                 max_line_size: max_line_size_many(
                     &[mixed_grad, embedded_context, key_scale],
                     shape.num_dims() - 1,
                 ),
+                is_in_place: false,
+                deterministic: true,
             }
         };
 
@@ -594,7 +591,8 @@ mod cube_impl {
                             )
                             .group(&launch_group, move |key| {
                                 if line_size <= key.max_line_size
-                                    && key.embedded_dim.is_multiple_of(line_size)
+                                    && key.d_model.is_multiple_of(line_size)
+                                    && block_size <= key.hardware.max_units_per_cube
                                 {
                                     1
                                 } else {
@@ -646,19 +644,31 @@ mod cube_impl {
 
     #[derive(Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
     struct ChannelMixerMixBackwardAutotuneKey {
+        runtime: String,
         dtype: burn::tensor::DType,
         num_elements: usize,
-        embedded_dim: usize,
-        bt_len: usize,
+        d_model: usize,
+        rows: usize,
+        hardware: CubeHardwareFingerprint,
         max_line_size: usize,
+        is_in_place: bool,
+        deterministic: bool,
     }
 
     impl core::fmt::Display for ChannelMixerMixBackwardAutotuneKey {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             write!(
                 f,
-                "{:?}:{}:{}:{}:{}",
-                self.dtype, self.num_elements, self.embedded_dim, self.bt_len, self.max_line_size
+                "{}:{:?}:n{}:d{}:r{}:hw{}:line{}:inplace{}:det{}",
+                self.runtime,
+                self.dtype,
+                self.num_elements,
+                self.d_model,
+                self.rows,
+                self.hardware,
+                self.max_line_size,
+                self.is_in_place,
+                self.deterministic
             )
         }
     }

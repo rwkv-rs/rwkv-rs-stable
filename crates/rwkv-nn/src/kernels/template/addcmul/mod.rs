@@ -176,7 +176,7 @@ pub fn addcmul5_reference<B: AddcmulBackend>(
 
 #[cfg(test)]
 mod tests {
-    use burn::tensor::{Distribution, Tensor, Tolerance};
+    use burn::tensor::{Distribution, Tensor};
 
     use crate::{
         kernels::template::addcmul::{
@@ -186,8 +186,13 @@ mod tests {
             addcmul5_reference,
             io::{Addcmul5ForwardInputs, AddcmulForwardInputs},
         },
-        test_utils::backend::{TestAutodiffBackend, TestAutodiffDevice, TestBackend, TestDevice},
+        test_utils::{
+            backend::{TestAutodiffBackend, TestAutodiffDevice, TestBackend, TestDevice},
+            numeric::{NumericTolerance, assert_tensor_close},
+        },
     };
+
+    const TOLERANCE: NumericTolerance = NumericTolerance::new(1.0e-5, 1.0e-5, 0.999999);
 
     /// Please name this function "forward" when you reuse this template.
     #[test]
@@ -204,12 +209,15 @@ mod tests {
             scale,
         };
 
-        let reference = addcmul_reference(inputs.clone())
-            .into_data()
-            .convert::<f32>();
-        let custom = addcmul_custom(inputs).into_data().convert::<f32>();
+        let reference = addcmul_reference(inputs.clone());
+        let custom = addcmul_custom(inputs);
 
-        reference.assert_approx_eq::<f32>(&custom, Tolerance::default());
+        assert_tensor_close(
+            "kernels/template/addcmul/forward",
+            custom,
+            reference,
+            TOLERANCE,
+        );
 
         let inputs = Addcmul5ForwardInputs {
             base,
@@ -224,46 +232,7 @@ mod tests {
         let reference = addcmul5_reference(inputs.clone());
         let custom = addcmul5_custom(inputs);
 
-        reference
-            .receptance_input
-            .into_data()
-            .convert::<f32>()
-            .assert_approx_eq::<f32>(
-                &custom.receptance_input.into_data().convert::<f32>(),
-                Tolerance::default(),
-            );
-        reference
-            .weight_decay_input
-            .into_data()
-            .convert::<f32>()
-            .assert_approx_eq::<f32>(
-                &custom.weight_decay_input.into_data().convert::<f32>(),
-                Tolerance::default(),
-            );
-        reference
-            .key_input
-            .into_data()
-            .convert::<f32>()
-            .assert_approx_eq::<f32>(
-                &custom.key_input.into_data().convert::<f32>(),
-                Tolerance::default(),
-            );
-        reference
-            .value_input
-            .into_data()
-            .convert::<f32>()
-            .assert_approx_eq::<f32>(
-                &custom.value_input.into_data().convert::<f32>(),
-                Tolerance::default(),
-            );
-        reference
-            .learning_rate_input
-            .into_data()
-            .convert::<f32>()
-            .assert_approx_eq::<f32>(
-                &custom.learning_rate_input.into_data().convert::<f32>(),
-                Tolerance::default(),
-            );
+        assert_addcmul5_close(reference, custom);
 
         println!("Both reference and the custom fused addcmul kernels have the same output");
     }
@@ -311,27 +280,24 @@ mod tests {
         let diff_grad_custom = diff_custom.grad_remove(&mut gradients).unwrap();
         let scale_grad_custom = scale_custom.grad_remove(&mut gradients).unwrap();
 
-        base_grad_ref
-            .into_data()
-            .convert::<f32>()
-            .assert_approx_eq::<f32>(
-                &base_grad_custom.into_data().convert::<f32>(),
-                Tolerance::default(),
-            );
-        diff_grad_ref
-            .into_data()
-            .convert::<f32>()
-            .assert_approx_eq::<f32>(
-                &diff_grad_custom.into_data().convert::<f32>(),
-                Tolerance::default(),
-            );
-        scale_grad_ref
-            .into_data()
-            .convert::<f32>()
-            .assert_approx_eq::<f32>(
-                &scale_grad_custom.into_data().convert::<f32>(),
-                Tolerance::default(),
-            );
+        assert_tensor_close(
+            "kernels/template/addcmul/backward/base",
+            base_grad_custom,
+            base_grad_ref,
+            TOLERANCE,
+        );
+        assert_tensor_close(
+            "kernels/template/addcmul/backward/diff",
+            diff_grad_custom,
+            diff_grad_ref,
+            TOLERANCE,
+        );
+        assert_tensor_close(
+            "kernels/template/addcmul/backward/scale",
+            scale_grad_custom,
+            scale_grad_ref,
+            TOLERANCE,
+        );
 
         println!("Both reference and the custom fused addcmul kernel have the same gradients");
 
@@ -420,56 +386,85 @@ mod tests {
             .grad_remove(&mut gradients)
             .unwrap();
 
-        base_grad_ref
-            .into_data()
-            .convert::<f32>()
-            .assert_approx_eq::<f32>(
-                &base_grad_custom.into_data().convert::<f32>(),
-                Tolerance::default(),
-            );
-        diff_grad_ref
-            .into_data()
-            .convert::<f32>()
-            .assert_approx_eq::<f32>(
-                &diff_grad_custom.into_data().convert::<f32>(),
-                Tolerance::default(),
-            );
-        receptance_scale_grad_ref
-            .into_data()
-            .convert::<f32>()
-            .assert_approx_eq::<f32>(
-                &receptance_scale_grad_custom.into_data().convert::<f32>(),
-                Tolerance::default(),
-            );
-        weight_decay_scale_grad_ref
-            .into_data()
-            .convert::<f32>()
-            .assert_approx_eq::<f32>(
-                &weight_decay_scale_grad_custom.into_data().convert::<f32>(),
-                Tolerance::default(),
-            );
-        key_scale_grad_ref
-            .into_data()
-            .convert::<f32>()
-            .assert_approx_eq::<f32>(
-                &key_scale_grad_custom.into_data().convert::<f32>(),
-                Tolerance::default(),
-            );
-        value_scale_grad_ref
-            .into_data()
-            .convert::<f32>()
-            .assert_approx_eq::<f32>(
-                &value_scale_grad_custom.into_data().convert::<f32>(),
-                Tolerance::default(),
-            );
-        learning_rate_scale_grad_ref
-            .into_data()
-            .convert::<f32>()
-            .assert_approx_eq::<f32>(
-                &learning_rate_scale_grad_custom.into_data().convert::<f32>(),
-                Tolerance::default(),
-            );
+        assert_tensor_close(
+            "kernels/template/addcmul5/backward/base",
+            base_grad_custom,
+            base_grad_ref,
+            TOLERANCE,
+        );
+        assert_tensor_close(
+            "kernels/template/addcmul5/backward/diff",
+            diff_grad_custom,
+            diff_grad_ref,
+            TOLERANCE,
+        );
+        assert_tensor_close(
+            "kernels/template/addcmul5/backward/receptance_scale",
+            receptance_scale_grad_custom,
+            receptance_scale_grad_ref,
+            TOLERANCE,
+        );
+        assert_tensor_close(
+            "kernels/template/addcmul5/backward/weight_decay_scale",
+            weight_decay_scale_grad_custom,
+            weight_decay_scale_grad_ref,
+            TOLERANCE,
+        );
+        assert_tensor_close(
+            "kernels/template/addcmul5/backward/key_scale",
+            key_scale_grad_custom,
+            key_scale_grad_ref,
+            TOLERANCE,
+        );
+        assert_tensor_close(
+            "kernels/template/addcmul5/backward/value_scale",
+            value_scale_grad_custom,
+            value_scale_grad_ref,
+            TOLERANCE,
+        );
+        assert_tensor_close(
+            "kernels/template/addcmul5/backward/learning_rate_scale",
+            learning_rate_scale_grad_custom,
+            learning_rate_scale_grad_ref,
+            TOLERANCE,
+        );
 
         println!("Both reference and the custom fused addcmul5 kernel have the same gradients");
+    }
+
+    fn assert_addcmul5_close<B: super::AddcmulBackend>(
+        reference: super::io::Addcmul5ForwardOutput<B>,
+        custom: super::io::Addcmul5ForwardOutput<B>,
+    ) {
+        assert_tensor_close(
+            "kernels/template/addcmul5/forward/receptance",
+            custom.receptance_input,
+            reference.receptance_input,
+            TOLERANCE,
+        );
+        assert_tensor_close(
+            "kernels/template/addcmul5/forward/weight_decay",
+            custom.weight_decay_input,
+            reference.weight_decay_input,
+            TOLERANCE,
+        );
+        assert_tensor_close(
+            "kernels/template/addcmul5/forward/key",
+            custom.key_input,
+            reference.key_input,
+            TOLERANCE,
+        );
+        assert_tensor_close(
+            "kernels/template/addcmul5/forward/value",
+            custom.value_input,
+            reference.value_input,
+            TOLERANCE,
+        );
+        assert_tensor_close(
+            "kernels/template/addcmul5/forward/learning_rate",
+            custom.learning_rate_input,
+            reference.learning_rate_input,
+            TOLERANCE,
+        );
     }
 }

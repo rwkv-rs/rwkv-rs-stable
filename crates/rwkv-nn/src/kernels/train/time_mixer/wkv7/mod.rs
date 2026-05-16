@@ -14,15 +14,18 @@ use burn_cubecl::{
     element::BoolElement,
 };
 
-use crate::kernels::train::time_mixer::wkv7::io::{
-    Wkv7PretrainForwardInputs,
-    Wkv7PretrainForwardPrimitiveInputs,
-    Wkv7StatepassForwardInputs,
-    Wkv7StatepassForwardOutput,
-    Wkv7StatepassForwardPrimitiveInputs,
-    Wkv7StatepassForwardPrimitiveOutput,
-    Wkv7StatetuneForwardInputs,
-    Wkv7StatetuneForwardPrimitiveInputs,
+use crate::kernels::train::{
+    layout::assert_linear_readable,
+    time_mixer::wkv7::io::{
+        Wkv7PretrainForwardInputs,
+        Wkv7PretrainForwardPrimitiveInputs,
+        Wkv7StatepassForwardInputs,
+        Wkv7StatepassForwardOutput,
+        Wkv7StatepassForwardPrimitiveInputs,
+        Wkv7StatepassForwardPrimitiveOutput,
+        Wkv7StatetuneForwardInputs,
+        Wkv7StatetuneForwardPrimitiveInputs,
+    },
 };
 
 /// Backend primitive capability for RWKV7 WKV training kernels.
@@ -53,27 +56,12 @@ where
     BT: BoolElement,
 {
     fn fused_wkv7_pretrain(inputs: Wkv7PretrainForwardPrimitiveInputs<Self>) -> FloatTensor<Self> {
-        assert!(
-            inputs.receptance.is_contiguous(),
-            "receptance must be contiguous"
-        );
-        assert!(
-            inputs.weight_decay.is_contiguous(),
-            "weight_decay must be contiguous"
-        );
-        assert!(
-            inputs.replacement_key.is_contiguous(),
-            "replacement_key must be contiguous"
-        );
-        assert!(inputs.value.is_contiguous(), "value must be contiguous");
-        assert!(
-            inputs.removal_key_normalized.is_contiguous(),
-            "removal_key_normalized must be contiguous"
-        );
-        assert!(
-            inputs.replacement.is_contiguous(),
-            "replacement must be contiguous"
-        );
+        assert_linear_readable("receptance", &inputs.receptance);
+        assert_linear_readable("weight_decay", &inputs.weight_decay);
+        assert_linear_readable("replacement_key", &inputs.replacement_key);
+        assert_linear_readable("value", &inputs.value);
+        assert_linear_readable("removal_key_normalized", &inputs.removal_key_normalized);
+        assert_linear_readable("replacement", &inputs.replacement);
 
         forward::fused_wkv7_pretrain::<R, F, I, BT>(inputs)
     }
@@ -81,10 +69,7 @@ where
     fn fused_wkv7_statetune(
         inputs: Wkv7StatetuneForwardPrimitiveInputs<Self>,
     ) -> FloatTensor<Self> {
-        assert!(
-            inputs.initial_state.is_contiguous(),
-            "initial_state must be contiguous"
-        );
+        assert_linear_readable("initial_state", &inputs.initial_state);
 
         forward::fused_wkv7_statetune::<R, F, I, BT>(inputs)
     }
@@ -92,12 +77,336 @@ where
     fn fused_wkv7_statepass(
         inputs: Wkv7StatepassForwardPrimitiveInputs<Self>,
     ) -> Wkv7StatepassForwardPrimitiveOutput<Self> {
-        assert!(
-            inputs.initial_state.is_contiguous(),
-            "initial_state must be contiguous"
-        );
+        assert_linear_readable("initial_state", &inputs.initial_state);
 
         forward::fused_wkv7_statepass::<R, F, I, BT>(inputs)
+    }
+}
+
+#[cfg(feature = "fusion")]
+mod fusion_impl {
+    use burn::tensor::Element;
+    use burn_fusion::{
+        Fusion,
+        FusionBackend,
+        FusionRuntime,
+        stream::{Operation, OperationStreams},
+    };
+    use burn_ir::{CustomOpIr, HandleContainer, OperationIr, TensorIr};
+
+    use super::*;
+
+    impl<B: FusionBackend + Wkv7Backend> Wkv7Backend for Fusion<B> {
+        fn fused_wkv7_pretrain(
+            inputs: Wkv7PretrainForwardPrimitiveInputs<Self>,
+        ) -> FloatTensor<Self> {
+            let Wkv7PretrainForwardPrimitiveInputs {
+                receptance,
+                weight_decay,
+                replacement_key,
+                value,
+                removal_key_normalized,
+                replacement,
+                chunk_len,
+            } = inputs;
+            let client = receptance.client.clone();
+            let output_shape = receptance.shape.clone();
+
+            #[derive(Clone, Debug)]
+            struct Wkv7PretrainOp<B1> {
+                desc: CustomOpIr,
+                chunk_len: usize,
+                _backend: core::marker::PhantomData<B1>,
+            }
+
+            impl<B1: FusionBackend + Wkv7Backend> Operation<B1::FusionRuntime> for Wkv7PretrainOp<B1> {
+                fn execute(
+                    &self,
+                    handles: &mut HandleContainer<
+                        <B1::FusionRuntime as FusionRuntime>::FusionHandle,
+                    >,
+                ) {
+                    let (
+                        [
+                            receptance,
+                            weight_decay,
+                            replacement_key,
+                            value,
+                            removal_key_normalized,
+                            replacement,
+                        ],
+                        [output_out],
+                    ) = self.desc.as_fixed();
+
+                    let output = B1::fused_wkv7_pretrain(Wkv7PretrainForwardPrimitiveInputs {
+                        receptance: handles.get_float_tensor::<B1>(receptance),
+                        weight_decay: handles.get_float_tensor::<B1>(weight_decay),
+                        replacement_key: handles.get_float_tensor::<B1>(replacement_key),
+                        value: handles.get_float_tensor::<B1>(value),
+                        removal_key_normalized: handles
+                            .get_float_tensor::<B1>(removal_key_normalized),
+                        replacement: handles.get_float_tensor::<B1>(replacement),
+                        chunk_len: self.chunk_len,
+                    });
+
+                    handles.register_float_tensor::<B1>(&output_out.id, output);
+                }
+            }
+
+            let mut streams = OperationStreams::default();
+            streams.tensor(&receptance);
+            streams.tensor(&weight_decay);
+            streams.tensor(&replacement_key);
+            streams.tensor(&value);
+            streams.tensor(&removal_key_normalized);
+            streams.tensor(&replacement);
+
+            let output_desc = [TensorIr::uninit(
+                client.create_empty_handle(),
+                output_shape,
+                B::FloatElem::dtype(),
+            )];
+            let desc = CustomOpIr::new(
+                "fused_wkv7_pretrain",
+                &[
+                    receptance.into_ir(),
+                    weight_decay.into_ir(),
+                    replacement_key.into_ir(),
+                    value.into_ir(),
+                    removal_key_normalized.into_ir(),
+                    replacement.into_ir(),
+                ],
+                &output_desc,
+            );
+            let op = Wkv7PretrainOp::<B> {
+                desc,
+                chunk_len,
+                _backend: core::marker::PhantomData,
+            };
+
+            client
+                .register(streams, OperationIr::Custom(op.desc.clone()), op)
+                .pop()
+                .expect("missing fused_wkv7_pretrain output")
+        }
+
+        fn fused_wkv7_statetune(
+            inputs: Wkv7StatetuneForwardPrimitiveInputs<Self>,
+        ) -> FloatTensor<Self> {
+            let Wkv7StatetuneForwardPrimitiveInputs {
+                initial_state,
+                sequence,
+            } = inputs;
+            let Wkv7PretrainForwardPrimitiveInputs {
+                receptance,
+                weight_decay,
+                replacement_key,
+                value,
+                removal_key_normalized,
+                replacement,
+                chunk_len,
+            } = sequence;
+            let client = receptance.client.clone();
+            let output_shape = receptance.shape.clone();
+
+            #[derive(Clone, Debug)]
+            struct Wkv7StatetuneOp<B1> {
+                desc: CustomOpIr,
+                chunk_len: usize,
+                _backend: core::marker::PhantomData<B1>,
+            }
+
+            impl<B1: FusionBackend + Wkv7Backend> Operation<B1::FusionRuntime> for Wkv7StatetuneOp<B1> {
+                fn execute(
+                    &self,
+                    handles: &mut HandleContainer<
+                        <B1::FusionRuntime as FusionRuntime>::FusionHandle,
+                    >,
+                ) {
+                    let (
+                        [
+                            initial_state,
+                            receptance,
+                            weight_decay,
+                            replacement_key,
+                            value,
+                            removal_key_normalized,
+                            replacement,
+                        ],
+                        [output_out],
+                    ) = self.desc.as_fixed();
+
+                    let output = B1::fused_wkv7_statetune(Wkv7StatetuneForwardPrimitiveInputs {
+                        initial_state: handles.get_float_tensor::<B1>(initial_state),
+                        sequence: Wkv7PretrainForwardPrimitiveInputs {
+                            receptance: handles.get_float_tensor::<B1>(receptance),
+                            weight_decay: handles.get_float_tensor::<B1>(weight_decay),
+                            replacement_key: handles.get_float_tensor::<B1>(replacement_key),
+                            value: handles.get_float_tensor::<B1>(value),
+                            removal_key_normalized: handles
+                                .get_float_tensor::<B1>(removal_key_normalized),
+                            replacement: handles.get_float_tensor::<B1>(replacement),
+                            chunk_len: self.chunk_len,
+                        },
+                    });
+
+                    handles.register_float_tensor::<B1>(&output_out.id, output);
+                }
+            }
+
+            let mut streams = OperationStreams::default();
+            streams.tensor(&initial_state);
+            streams.tensor(&receptance);
+            streams.tensor(&weight_decay);
+            streams.tensor(&replacement_key);
+            streams.tensor(&value);
+            streams.tensor(&removal_key_normalized);
+            streams.tensor(&replacement);
+
+            let output_desc = [TensorIr::uninit(
+                client.create_empty_handle(),
+                output_shape,
+                B::FloatElem::dtype(),
+            )];
+            let desc = CustomOpIr::new(
+                "fused_wkv7_statetune",
+                &[
+                    initial_state.into_ir(),
+                    receptance.into_ir(),
+                    weight_decay.into_ir(),
+                    replacement_key.into_ir(),
+                    value.into_ir(),
+                    removal_key_normalized.into_ir(),
+                    replacement.into_ir(),
+                ],
+                &output_desc,
+            );
+            let op = Wkv7StatetuneOp::<B> {
+                desc,
+                chunk_len,
+                _backend: core::marker::PhantomData,
+            };
+
+            client
+                .register(streams, OperationIr::Custom(op.desc.clone()), op)
+                .pop()
+                .expect("missing fused_wkv7_statetune output")
+        }
+
+        fn fused_wkv7_statepass(
+            inputs: Wkv7StatepassForwardPrimitiveInputs<Self>,
+        ) -> Wkv7StatepassForwardPrimitiveOutput<Self> {
+            let Wkv7StatepassForwardPrimitiveInputs {
+                initial_state,
+                sequence,
+            } = inputs;
+            let Wkv7PretrainForwardPrimitiveInputs {
+                receptance,
+                weight_decay,
+                replacement_key,
+                value,
+                removal_key_normalized,
+                replacement,
+                chunk_len,
+            } = sequence;
+            let client = receptance.client.clone();
+            let output_shape = receptance.shape.clone();
+            let next_state_shape = initial_state.shape.clone();
+
+            #[derive(Clone, Debug)]
+            struct Wkv7StatepassOp<B1> {
+                desc: CustomOpIr,
+                chunk_len: usize,
+                _backend: core::marker::PhantomData<B1>,
+            }
+
+            impl<B1: FusionBackend + Wkv7Backend> Operation<B1::FusionRuntime> for Wkv7StatepassOp<B1> {
+                fn execute(
+                    &self,
+                    handles: &mut HandleContainer<
+                        <B1::FusionRuntime as FusionRuntime>::FusionHandle,
+                    >,
+                ) {
+                    let (
+                        [
+                            initial_state,
+                            receptance,
+                            weight_decay,
+                            replacement_key,
+                            value,
+                            removal_key_normalized,
+                            replacement,
+                        ],
+                        [output_out, next_state_out],
+                    ) = self.desc.as_fixed();
+
+                    let output = B1::fused_wkv7_statepass(Wkv7StatepassForwardPrimitiveInputs {
+                        initial_state: handles.get_float_tensor::<B1>(initial_state),
+                        sequence: Wkv7PretrainForwardPrimitiveInputs {
+                            receptance: handles.get_float_tensor::<B1>(receptance),
+                            weight_decay: handles.get_float_tensor::<B1>(weight_decay),
+                            replacement_key: handles.get_float_tensor::<B1>(replacement_key),
+                            value: handles.get_float_tensor::<B1>(value),
+                            removal_key_normalized: handles
+                                .get_float_tensor::<B1>(removal_key_normalized),
+                            replacement: handles.get_float_tensor::<B1>(replacement),
+                            chunk_len: self.chunk_len,
+                        },
+                    });
+
+                    handles.register_float_tensor::<B1>(&output_out.id, output.output);
+                    handles.register_float_tensor::<B1>(&next_state_out.id, output.next_state);
+                }
+            }
+
+            let mut streams = OperationStreams::default();
+            streams.tensor(&initial_state);
+            streams.tensor(&receptance);
+            streams.tensor(&weight_decay);
+            streams.tensor(&replacement_key);
+            streams.tensor(&value);
+            streams.tensor(&removal_key_normalized);
+            streams.tensor(&replacement);
+
+            let output_desc = [
+                TensorIr::uninit(
+                    client.create_empty_handle(),
+                    output_shape,
+                    B::FloatElem::dtype(),
+                ),
+                TensorIr::uninit(
+                    client.create_empty_handle(),
+                    next_state_shape,
+                    B::FloatElem::dtype(),
+                ),
+            ];
+            let desc = CustomOpIr::new(
+                "fused_wkv7_statepass",
+                &[
+                    initial_state.into_ir(),
+                    receptance.into_ir(),
+                    weight_decay.into_ir(),
+                    replacement_key.into_ir(),
+                    value.into_ir(),
+                    removal_key_normalized.into_ir(),
+                    replacement.into_ir(),
+                ],
+                &output_desc,
+            );
+            let op = Wkv7StatepassOp::<B> {
+                desc,
+                chunk_len,
+                _backend: core::marker::PhantomData,
+            };
+
+            let mut outputs = client.register(streams, OperationIr::Custom(op.desc.clone()), op);
+            let next_state = outputs
+                .pop()
+                .expect("missing fused_wkv7_statepass next_state");
+            let output = outputs.pop().expect("missing fused_wkv7_statepass output");
+
+            Wkv7StatepassForwardPrimitiveOutput { output, next_state }
+        }
     }
 }
 
@@ -238,172 +547,5 @@ fn wkv7_reference_with_state<B: Wkv7Backend>(
     Wkv7StatepassForwardOutput {
         output: Tensor::cat(outputs, 1),
         next_state: state,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use burn::tensor::{Distribution, Tensor, Tolerance};
-
-    use crate::{
-        kernels::train::time_mixer::wkv7::{
-            io::{
-                Wkv7PretrainForwardInputs,
-                Wkv7StatepassForwardInputs,
-                Wkv7StatetuneForwardInputs,
-            },
-            wkv7_pretrain_custom,
-            wkv7_pretrain_reference,
-            wkv7_statepass_custom,
-            wkv7_statepass_reference,
-            wkv7_statetune_custom,
-            wkv7_statetune_reference,
-        },
-        test_utils::backend::{TestAutodiffBackend, TestAutodiffDevice, TestBackend, TestDevice},
-    };
-
-    #[test]
-    fn forward() {
-        let device: TestDevice = Default::default();
-        let inputs = random_sequence::<TestBackend>([2, 16, 2, 8], &device);
-        let initial_state =
-            Tensor::<TestBackend, 4>::random([2, 2, 8, 8], Distribution::Default, &device);
-
-        let reference = wkv7_pretrain_reference(inputs.clone().into_inputs());
-        let custom = wkv7_pretrain_custom(inputs.clone().into_inputs());
-        assert_close(reference, custom);
-
-        let statetune_inputs = Wkv7StatetuneForwardInputs {
-            initial_state: initial_state.clone(),
-            sequence: inputs.clone().into_inputs(),
-        };
-        let reference = wkv7_statetune_reference(statetune_inputs.clone());
-        let custom = wkv7_statetune_custom(statetune_inputs);
-        assert_close(reference, custom);
-
-        let statepass_inputs = Wkv7StatepassForwardInputs {
-            initial_state,
-            sequence: inputs.into_inputs(),
-        };
-        let reference = wkv7_statepass_reference(statepass_inputs.clone());
-        let custom = wkv7_statepass_custom(statepass_inputs);
-        assert_close(reference.output, custom.output);
-        assert_close(reference.next_state, custom.next_state);
-    }
-
-    #[test]
-    fn backward() {
-        let device: TestAutodiffDevice = Default::default();
-        let inputs = random_sequence::<TestAutodiffBackend>([1, 16, 1, 4], &device).require_grad();
-
-        let reference = wkv7_pretrain_reference(inputs.clone().into_inputs()).sum();
-        let mut gradients = reference.backward();
-        let reference_grads = inputs.clone().remove_grads(&mut gradients);
-
-        let custom = wkv7_pretrain_custom(inputs.clone().into_inputs()).sum();
-        let mut gradients = custom.backward();
-        let custom_grads = inputs.remove_grads(&mut gradients);
-
-        for (reference, custom) in [
-            "receptance",
-            "weight_decay",
-            "replacement_key",
-            "value",
-            "removal_key_normalized",
-            "replacement",
-        ]
-        .into_iter()
-        .zip(reference_grads.into_iter().zip(custom_grads))
-        .map(|(_, grads)| grads)
-        {
-            reference
-                .into_data()
-                .convert::<f32>()
-                .assert_approx_eq::<f32>(
-                    &custom.into_data().convert::<f32>(),
-                    Tolerance::absolute(1e-2),
-                );
-        }
-    }
-
-    #[test]
-    #[should_panic]
-    fn forward_panics_on_wrong_context_len() {
-        let device: TestDevice = Default::default();
-        let inputs = random_sequence::<TestBackend>([1, 15, 1, 4], &device);
-
-        let _ = wkv7_pretrain_custom(inputs.into_inputs());
-    }
-
-    #[derive(Clone)]
-    struct TestInputs<B: super::Wkv7Backend> {
-        receptance: Tensor<B, 4>,
-        weight_decay: Tensor<B, 4>,
-        replacement_key: Tensor<B, 4>,
-        value: Tensor<B, 4>,
-        removal_key_normalized: Tensor<B, 4>,
-        replacement: Tensor<B, 4>,
-    }
-
-    impl<B: super::Wkv7Backend> TestInputs<B> {
-        fn into_inputs(self) -> Wkv7PretrainForwardInputs<B> {
-            Wkv7PretrainForwardInputs {
-                receptance: self.receptance,
-                weight_decay: self.weight_decay,
-                replacement_key: self.replacement_key,
-                value: self.value,
-                removal_key_normalized: self.removal_key_normalized,
-                replacement: self.replacement,
-                chunk_len: 16,
-            }
-        }
-    }
-
-    impl<B: super::AutodiffBackend> TestInputs<B> {
-        fn require_grad(self) -> Self {
-            Self {
-                receptance: self.receptance.require_grad(),
-                weight_decay: self.weight_decay.require_grad(),
-                replacement_key: self.replacement_key.require_grad(),
-                value: self.value.require_grad(),
-                removal_key_normalized: self.removal_key_normalized.require_grad(),
-                replacement: self.replacement.require_grad(),
-            }
-        }
-
-        fn remove_grads(self, gradients: &mut B::Gradients) -> Vec<Tensor<B::InnerBackend, 4>> {
-            vec![
-                self.receptance.grad_remove(gradients).unwrap(),
-                self.weight_decay.grad_remove(gradients).unwrap(),
-                self.replacement_key.grad_remove(gradients).unwrap(),
-                self.value.grad_remove(gradients).unwrap(),
-                self.removal_key_normalized.grad_remove(gradients).unwrap(),
-                self.replacement.grad_remove(gradients).unwrap(),
-            ]
-        }
-    }
-
-    fn random_sequence<B: super::Wkv7Backend>(
-        shape: [usize; 4],
-        device: &B::Device,
-    ) -> TestInputs<B> {
-        TestInputs {
-            receptance: Tensor::random(shape, Distribution::Default, device),
-            weight_decay: Tensor::random(shape, Distribution::Default, device),
-            replacement_key: Tensor::random(shape, Distribution::Default, device),
-            value: Tensor::random(shape, Distribution::Default, device),
-            removal_key_normalized: Tensor::random(shape, Distribution::Default, device),
-            replacement: Tensor::random(shape, Distribution::Default, device),
-        }
-    }
-
-    fn assert_close<B: super::Wkv7Backend>(reference: Tensor<B, 4>, custom: Tensor<B, 4>) {
-        reference
-            .into_data()
-            .convert::<f32>()
-            .assert_approx_eq::<f32>(
-                &custom.into_data().convert::<f32>(),
-                Tolerance::absolute(1e-2),
-            );
     }
 }

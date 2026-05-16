@@ -1,44 +1,60 @@
-use burn::tensor::{DType, ops::FloatTensor};
+use burn::tensor::{ops::FloatTensor, DType};
 use burn_cubecl::{
+    cubecl::{
+        calculate_cube_count_elemwise,
+        prelude::*,
+        tensor_vector_size_parallel,
+        tune::{anchor, local_tuner, AutotuneKey, LocalTuner, Tunable, TunableSet, TuneGroup},
+    },
+    element::BoolElement,
+    ops::numeric::empty_device,
+    tensor::CubeTensor,
     CubeBackend,
     CubeElement,
     CubeRuntime,
     CubeTuneId,
     FloatElement,
     IntElement,
-    cubecl::{
-        calculate_cube_count_elemwise,
-        prelude::*,
-        tensor_vector_size_parallel,
-        tune::{AutotuneKey, LocalTuner, Tunable, TunableSet, TuneGroup, anchor, local_tuner},
-    },
-    element::BoolElement,
-    ops::numeric::empty_device,
-    tensor::CubeTensor,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::kernels::train::time_mixer::learning_rate_gate::{
-    io::LearningRateGateForwardPrimitiveInputs,
-    kernel::{learning_rate_gate_forward_kernel, learning_rate_gate_forward_pow2_kernel},
+use crate::kernels::train::{
+    layout::CubeHardwareFingerprint,
+    time_mixer::learning_rate_gate::{
+        io::LearningRateGateForwardPrimitiveInputs,
+        kernel::{learning_rate_gate_forward_kernel, learning_rate_gate_forward_pow2_kernel},
+    },
 };
 
 const LINE_SIZE_CANDIDATES: [usize; 7] = [1, 2, 4, 8, 16, 32, 64];
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
 struct LearningRateGateForwardAutotuneKey {
+    runtime: String,
     dtype: DType,
     num_elements: usize,
     embedded_dim: usize,
+    rows: usize,
+    hardware: CubeHardwareFingerprint,
     max_line_size: usize,
+    is_in_place: bool,
+    deterministic: bool,
 }
 
 impl core::fmt::Display for LearningRateGateForwardAutotuneKey {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
-            "{:?}:{}:{}:{}",
-            self.dtype, self.num_elements, self.embedded_dim, self.max_line_size
+            "{}:{:?}:n{}:d{}:r{}:{}:line{}:inplace{}:det{}",
+            self.runtime,
+            self.dtype,
+            self.num_elements,
+            self.embedded_dim,
+            self.rows,
+            self.hardware,
+            self.max_line_size,
+            self.is_in_place,
+            self.deterministic
         )
     }
 }
@@ -61,12 +77,21 @@ pub(crate) fn fused_learning_rate_gate<
 
     let key = |(learning_rate_base, learning_rate_input): &(CubeTensor<R>, CubeTensor<R>)| {
         let shape = learning_rate_input.meta.shape();
+        let embedded_dim = shape[2];
+        let hardware = CubeHardwareFingerprint::from_hardware(
+            &learning_rate_input.client.properties().hardware,
+        );
 
         LearningRateGateForwardAutotuneKey {
+            runtime: R::name(&learning_rate_input.client).to_owned(),
             dtype: learning_rate_input.dtype,
             num_elements: anchor(shape.num_elements(), None, Some(1), None),
-            embedded_dim: shape[2],
+            embedded_dim,
+            rows: anchor(shape.num_elements() / embedded_dim, None, Some(1), None),
+            hardware,
             max_line_size: max_line_size_pair(learning_rate_base, learning_rate_input),
+            is_in_place: false,
+            deterministic: true,
         }
     };
 
@@ -122,10 +147,10 @@ pub(crate) fn fused_learning_rate_gate<
 mod fusion_impl {
     use burn::tensor::{Element, Shape};
     use burn_fusion::{
+        stream::{Operation, OperationStreams},
         Fusion,
         FusionBackend,
         FusionRuntime,
-        stream::{Operation, OperationStreams},
     };
     use burn_ir::{CustomOpIr, HandleContainer, OperationIr, TensorIr};
 

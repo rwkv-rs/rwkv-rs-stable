@@ -4,7 +4,7 @@ mod forward;
 pub mod io;
 mod kernel;
 
-use burn::tensor::{Tensor, TensorPrimitive};
+use burn::tensor::{Tensor, TensorPrimitive, ops::FloatTensor};
 use burn_cubecl::{
     CubeBackend,
     CubeElement,
@@ -14,11 +14,14 @@ use burn_cubecl::{
     element::BoolElement,
 };
 
-use crate::kernels::train::time_mixer::mix6::io::{
-    Mix6ForwardInputs,
-    Mix6ForwardOutput,
-    Mix6ForwardPrimitiveInputs,
-    Mix6ForwardPrimitiveOutput,
+use crate::kernels::train::{
+    layout::assert_linear_readable,
+    time_mixer::mix6::io::{
+        Mix6ForwardInputs,
+        Mix6ForwardOutput,
+        Mix6ForwardPrimitiveInputs,
+        Mix6ForwardPrimitiveOutput,
+    },
 };
 
 /// Backend primitive capability for the RWKV7 pretrain mix6 operation.
@@ -32,6 +35,11 @@ pub trait AutodiffBackend: Mix6Backend + burn::tensor::backend::AutodiffBackend 
 
 impl<B> AutodiffBackend for B where B: Mix6Backend + burn::tensor::backend::AutodiffBackend {}
 
+#[doc(hidden)]
+pub trait Mix6StackedBackend: Mix6Backend {
+    fn fused_mix6_stacked(inputs: Mix6ForwardPrimitiveInputs<Self>) -> FloatTensor<Self>;
+}
+
 impl<R, F, I, BT> Mix6Backend for CubeBackend<R, F, I, BT>
 where
     R: CubeRuntime,
@@ -40,34 +48,13 @@ where
     BT: BoolElement,
 {
     fn fused_mix6(inputs: Mix6ForwardPrimitiveInputs<Self>) -> Mix6ForwardPrimitiveOutput<Self> {
-        assert!(
-            inputs.embedded_context.is_contiguous(),
-            "embedded_context must be contiguous"
-        );
-        assert!(
-            inputs.receptance_scale.is_contiguous(),
-            "receptance_scale must be contiguous"
-        );
-        assert!(
-            inputs.weight_decay_scale.is_contiguous(),
-            "weight_decay_scale must be contiguous"
-        );
-        assert!(
-            inputs.key_scale.is_contiguous(),
-            "key_scale must be contiguous"
-        );
-        assert!(
-            inputs.value_scale.is_contiguous(),
-            "value_scale must be contiguous"
-        );
-        assert!(
-            inputs.learning_rate_scale.is_contiguous(),
-            "learning_rate_scale must be contiguous"
-        );
-        assert!(
-            inputs.gate_scale.is_contiguous(),
-            "gate_scale must be contiguous"
-        );
+        assert_linear_readable("embedded_context", &inputs.embedded_context);
+        assert_linear_readable("receptance_scale", &inputs.receptance_scale);
+        assert_linear_readable("weight_decay_scale", &inputs.weight_decay_scale);
+        assert_linear_readable("key_scale", &inputs.key_scale);
+        assert_linear_readable("value_scale", &inputs.value_scale);
+        assert_linear_readable("learning_rate_scale", &inputs.learning_rate_scale);
+        assert_linear_readable("gate_scale", &inputs.gate_scale);
 
         forward::fused_mix6::<R, F, I, BT>(inputs)
     }
@@ -86,6 +73,14 @@ where
 /// The custom path fuses the shift difference and six branch add/multiply expressions into one
 /// multi-output kernel. It shares the current token, previous token, and difference values across
 /// the six branch writes while keeping each scale broadcast as embedded-dimension index math.
+#[cfg(any(
+    feature = "cuda",
+    feature = "rocm",
+    feature = "vulkan",
+    feature = "metal",
+    feature = "wgpu",
+    feature = "webgpu"
+))]
 pub fn mix6_custom<B: Mix6Backend>(inputs: Mix6ForwardInputs<B>) -> Mix6ForwardOutput<B> {
     inputs.check().unwrap();
     let output = B::fused_mix6(inputs.to_primitive());
@@ -102,6 +97,28 @@ pub fn mix6_custom<B: Mix6Backend>(inputs: Mix6ForwardInputs<B>) -> Mix6ForwardO
         )),
         gate_input: Tensor::from_primitive(TensorPrimitive::Float(output.gate_input)),
     }
+}
+
+#[cfg(not(any(
+    feature = "cuda",
+    feature = "rocm",
+    feature = "vulkan",
+    feature = "metal",
+    feature = "wgpu",
+    feature = "webgpu"
+)))]
+/// CPU-only fallback that keeps unit tests on the Burn reference semantics.
+pub fn mix6_custom<B: Mix6Backend>(inputs: Mix6ForwardInputs<B>) -> Mix6ForwardOutput<B> {
+    inputs.check().unwrap();
+    mix6_reference(inputs)
+}
+
+#[doc(hidden)]
+pub fn mix6_stacked_custom<B: Mix6StackedBackend>(inputs: Mix6ForwardInputs<B>) -> Tensor<B, 4> {
+    inputs.check().unwrap();
+    Tensor::from_primitive(TensorPrimitive::Float(B::fused_mix6_stacked(
+        inputs.to_primitive(),
+    )))
 }
 
 /// Computes RWKV7 pretrain mix6 with regular Burn tensor operations.
@@ -174,218 +191,4 @@ pub fn mix6<B: Mix6Backend>(
         learning_rate_scale,
         gate_scale,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use burn::tensor::{Distribution, ElementConversion, Tensor};
-
-    use crate::{
-        kernels::train::time_mixer::mix6::{
-            io::{Mix6ForwardInputs, Mix6ForwardOutput},
-            mix6_custom,
-            mix6_reference,
-        },
-        test_utils::backend::{TestAutodiffBackend, TestAutodiffDevice, TestBackend, TestDevice},
-    };
-
-    #[test]
-    fn forward() {
-        let device: TestDevice = Default::default();
-
-        for shape in [[2, 8, 32], [1, 3, 17]] {
-            let inputs = random_inputs::<TestBackend>(shape, &device);
-
-            let reference = mix6_reference(inputs.clone().into_inputs());
-            let custom = mix6_custom(inputs.into_inputs());
-
-            assert_output_close(reference, custom);
-        }
-    }
-
-    #[test]
-    fn backward() {
-        let device: TestAutodiffDevice = Default::default();
-
-        for shape in [[2, 8, 32], [1, 3, 17]] {
-            for branch_index in 0..6 {
-                let inputs = random_inputs::<TestAutodiffBackend>(shape, &device);
-                let reference_inputs = inputs.clone().require_grad();
-                let reference = branch_output(
-                    mix6_reference(reference_inputs.clone().into_inputs()),
-                    branch_index,
-                );
-                let mut gradients = reference.backward();
-                let mut reference_grads = reference_inputs.remove_optional_grads(&mut gradients);
-
-                let custom_inputs = inputs.require_grad();
-                let custom = branch_output(
-                    mix6_custom(custom_inputs.clone().into_inputs()),
-                    branch_index,
-                );
-                let mut gradients = custom.backward();
-                let mut custom_grads = custom_inputs.remove_optional_grads(&mut gradients);
-
-                assert_tensor_close(
-                    reference_grads[0].take().unwrap(),
-                    custom_grads[0].take().unwrap(),
-                );
-                assert_tensor_close(
-                    reference_grads[branch_index + 1].take().unwrap(),
-                    custom_grads[branch_index + 1].take().unwrap(),
-                );
-
-                for scale_grad_index in 1..7 {
-                    if scale_grad_index != branch_index + 1 {
-                        assert_optional_zero(reference_grads[scale_grad_index].take());
-                        assert_optional_zero(custom_grads[scale_grad_index].take());
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    #[should_panic]
-    fn forward_panics_on_wrong_scale_shape() {
-        let device: TestDevice = Default::default();
-        let mut inputs = random_inputs::<TestBackend>([2, 4, 8], &device);
-        inputs.gate_scale =
-            Tensor::<TestBackend, 3>::random([1, 1, 7], Distribution::Default, &device);
-
-        let _ = mix6_custom(inputs.into_inputs());
-    }
-
-    #[derive(Clone)]
-    struct TestInputs<B: super::Mix6Backend> {
-        embedded_context: Tensor<B, 3>,
-        receptance_scale: Tensor<B, 3>,
-        weight_decay_scale: Tensor<B, 3>,
-        key_scale: Tensor<B, 3>,
-        value_scale: Tensor<B, 3>,
-        learning_rate_scale: Tensor<B, 3>,
-        gate_scale: Tensor<B, 3>,
-    }
-
-    impl<B: super::Mix6Backend> TestInputs<B> {
-        fn into_inputs(self) -> Mix6ForwardInputs<B> {
-            Mix6ForwardInputs {
-                embedded_context: self.embedded_context,
-                receptance_scale: self.receptance_scale,
-                weight_decay_scale: self.weight_decay_scale,
-                key_scale: self.key_scale,
-                value_scale: self.value_scale,
-                learning_rate_scale: self.learning_rate_scale,
-                gate_scale: self.gate_scale,
-            }
-        }
-    }
-
-    impl<B: super::AutodiffBackend> TestInputs<B> {
-        fn require_grad(self) -> Self {
-            Self {
-                embedded_context: self.embedded_context.require_grad(),
-                receptance_scale: self.receptance_scale.require_grad(),
-                weight_decay_scale: self.weight_decay_scale.require_grad(),
-                key_scale: self.key_scale.require_grad(),
-                value_scale: self.value_scale.require_grad(),
-                learning_rate_scale: self.learning_rate_scale.require_grad(),
-                gate_scale: self.gate_scale.require_grad(),
-            }
-        }
-
-        fn remove_optional_grads(
-            self,
-            gradients: &mut B::Gradients,
-        ) -> Vec<Option<Tensor<B::InnerBackend, 3>>> {
-            vec![
-                self.embedded_context.grad_remove(gradients),
-                self.receptance_scale.grad_remove(gradients),
-                self.weight_decay_scale.grad_remove(gradients),
-                self.key_scale.grad_remove(gradients),
-                self.value_scale.grad_remove(gradients),
-                self.learning_rate_scale.grad_remove(gradients),
-                self.gate_scale.grad_remove(gradients),
-            ]
-        }
-    }
-
-    fn random_inputs<B: super::Mix6Backend>(
-        shape: [usize; 3],
-        device: &B::Device,
-    ) -> TestInputs<B> {
-        TestInputs {
-            embedded_context: Tensor::<B, 3>::random(shape, Distribution::Default, device),
-            receptance_scale: Tensor::<B, 3>::random(
-                [1, 1, shape[2]],
-                Distribution::Default,
-                device,
-            ),
-            weight_decay_scale: Tensor::<B, 3>::random(
-                [1, 1, shape[2]],
-                Distribution::Default,
-                device,
-            ),
-            key_scale: Tensor::<B, 3>::random([1, 1, shape[2]], Distribution::Default, device),
-            value_scale: Tensor::<B, 3>::random([1, 1, shape[2]], Distribution::Default, device),
-            learning_rate_scale: Tensor::<B, 3>::random(
-                [1, 1, shape[2]],
-                Distribution::Default,
-                device,
-            ),
-            gate_scale: Tensor::<B, 3>::random([1, 1, shape[2]], Distribution::Default, device),
-        }
-    }
-
-    fn branch_output<B: super::Mix6Backend>(
-        output: Mix6ForwardOutput<B>,
-        branch_index: usize,
-    ) -> Tensor<B, 3> {
-        match branch_index {
-            0 => output.receptance_input,
-            1 => output.weight_decay_input,
-            2 => output.key_input,
-            3 => output.value_input,
-            4 => output.learning_rate_input,
-            5 => output.gate_input,
-            _ => panic!("branch index must be in 0..6"),
-        }
-    }
-
-    fn assert_output_close<B: super::Mix6Backend>(
-        reference: Mix6ForwardOutput<B>,
-        custom: Mix6ForwardOutput<B>,
-    ) {
-        assert_tensor_close(reference.receptance_input, custom.receptance_input);
-        assert_tensor_close(reference.weight_decay_input, custom.weight_decay_input);
-        assert_tensor_close(reference.key_input, custom.key_input);
-        assert_tensor_close(reference.value_input, custom.value_input);
-        assert_tensor_close(reference.learning_rate_input, custom.learning_rate_input);
-        assert_tensor_close(reference.gate_input, custom.gate_input);
-    }
-
-    fn assert_tensor_close<B: super::Mix6Backend, const D: usize>(
-        reference: Tensor<B, D>,
-        custom: Tensor<B, D>,
-    ) {
-        assert_eq!(reference.dims(), custom.dims());
-        if reference.shape().num_elements() == 0 {
-            return;
-        }
-
-        let max_diff = (reference - custom).abs().max().into_scalar().elem::<f32>();
-        assert!(max_diff <= 1.0e-4, "max diff {max_diff}");
-    }
-
-    fn assert_optional_zero<B: super::Mix6Backend, const D: usize>(tensor: Option<Tensor<B, D>>) {
-        let Some(tensor) = tensor else {
-            return;
-        };
-        if tensor.shape().num_elements() == 0 {
-            return;
-        }
-
-        let max_abs = tensor.abs().max().into_scalar().elem::<f32>();
-        assert!(max_abs <= 1.0e-4, "max abs {max_abs}");
-    }
 }

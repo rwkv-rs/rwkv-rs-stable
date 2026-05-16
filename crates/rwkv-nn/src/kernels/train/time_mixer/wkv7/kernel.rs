@@ -58,6 +58,111 @@ fn decay_from_weight_decay<F: Float>(weight_decay: F) -> F {
 }
 
 #[cube(launch_unchecked, address_type = "dynamic")]
+pub fn wkv7_pretrain_forward_output_kernel<F: Float>(
+    inputs: &Wkv7ForwardInputs<F>,
+    output: &mut LinearView<F, ReadWrite>,
+    context_len: usize,
+    num_heads: usize,
+    #[comptime] head_size: usize,
+    #[comptime] row_tile: usize,
+    _chunk_len: usize,
+    #[define(F)] _dtype: StorageType,
+) {
+    let batch_index = CUBE_POS_Y as usize;
+    let head_index = CUBE_POS_X as usize;
+    let row_local = UNIT_POS as usize;
+    let row_index = CUBE_POS_Z as usize * row_tile + row_local;
+    let row_is_active = row_index < head_size;
+
+    let mut state = Array::<f32>::new(head_size);
+    let mut shared_receptance = SharedMemory::<f32>::new(head_size);
+    let mut shared_decay = SharedMemory::<f32>::new(head_size);
+    let mut shared_replacement_key = SharedMemory::<f32>::new(head_size);
+    let mut shared_value = SharedMemory::<f32>::new(head_size);
+    let mut shared_removal_key_normalized = SharedMemory::<f32>::new(head_size);
+    let mut shared_replacement = SharedMemory::<f32>::new(head_size);
+    if row_is_active {
+        #[unroll]
+        for col_index in 0..head_size {
+            state[col_index] = f32::new(0.0);
+        }
+    }
+
+    let time_cell = RuntimeCell::<usize>::new(0);
+
+    while time_cell.read() < context_len {
+        let time_index = time_cell.read();
+
+        let load_cell = RuntimeCell::<usize>::new(row_local);
+        while load_cell.read() < head_size {
+            let lane_index = load_cell.read();
+            let lane_input_index = sequence_index(
+                batch_index,
+                time_index,
+                head_index,
+                lane_index,
+                context_len,
+                num_heads,
+                head_size,
+            );
+
+            shared_receptance[lane_index] = f32::cast_from(inputs.receptance[lane_input_index]);
+            shared_decay[lane_index] = f32::cast_from(decay_from_weight_decay::<F>(
+                inputs.weight_decay[lane_input_index],
+            ));
+            shared_replacement_key[lane_index] =
+                f32::cast_from(inputs.replacement_key[lane_input_index]);
+            shared_value[lane_index] = f32::cast_from(inputs.value[lane_input_index]);
+            shared_removal_key_normalized[lane_index] =
+                f32::cast_from(inputs.removal_key_normalized[lane_input_index]);
+            shared_replacement[lane_index] = f32::cast_from(inputs.replacement[lane_input_index]);
+            load_cell.store(load_cell.read() + row_tile);
+        }
+        sync_cube();
+
+        if row_is_active {
+            let mut state_replacement = f32::new(0.0);
+
+            #[unroll]
+            for col_index in 0..head_size {
+                let state_value = state[col_index];
+                let removal_value = shared_removal_key_normalized[col_index];
+                state_replacement += state_value * removal_value;
+            }
+
+            let value_index = sequence_index(
+                batch_index,
+                time_index,
+                head_index,
+                row_index,
+                context_len,
+                num_heads,
+                head_size,
+            );
+            let value = shared_value[row_index];
+            let mut output_value = f32::new(0.0);
+
+            #[unroll]
+            for col_index in 0..head_size {
+                let state_value = state[col_index];
+                let decay = shared_decay[col_index];
+                let replacement = shared_replacement[col_index];
+                let replacement_key = shared_replacement_key[col_index];
+                let receptance = shared_receptance[col_index];
+                let updated =
+                    state_value * decay + state_replacement * replacement + value * replacement_key;
+                state[col_index] = updated;
+                output_value += updated * receptance;
+            }
+
+            output[value_index] = F::cast_from(output_value);
+        }
+        sync_cube();
+        time_cell.store(time_cell.read() + 1);
+    }
+}
+
+#[cube(launch_unchecked, address_type = "dynamic")]
 pub fn wkv7_pretrain_forward_kernel<F: Float>(
     inputs: &Wkv7ForwardInputs<F>,
     output: &mut LinearView<F, ReadWrite>,

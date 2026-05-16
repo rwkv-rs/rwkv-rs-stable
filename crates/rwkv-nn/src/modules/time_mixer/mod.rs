@@ -8,7 +8,11 @@ use weight_prepare::{WeightPrepare, WeightPrepareConfig};
 
 use crate::{
     kernels::train::time_mixer::{
+        gated_readout_combine::GatedReadoutCombineBackend,
+        key_prepare::KeyPrepareBackend,
+        learning_rate_gate::LearningRateGateBackend,
         mix6::{Mix6Backend, mix6},
+        value_residual_gate::ValueResidualGateBackend,
         wkv7::{
             Wkv7Backend,
             io::{Wkv7StatepassForwardInputs, Wkv7StatetuneForwardInputs},
@@ -156,7 +160,14 @@ impl<B: Backend> TimeMixer<B> {
     )]
     pub fn forward(&self, time_mixer_input: TimeMixerIO<B>) -> TimeMixerIO<B>
     where
-        B: Backend + Mix6Backend + Wkv7Backend,
+        B: Backend
+            + KeyPrepareBackend
+            + GatedReadoutCombineBackend
+            + LearningRateGateBackend
+            + Mix6Backend
+            + ValueResidualGateBackend
+            + crate::kernels::train::time_mixer::weight_decay_transform::WeightDecayTransformBackend
+            + Wkv7Backend,
     {
         let TimeMixerIO {
             embedded_context,
@@ -219,7 +230,14 @@ impl<B: Backend> TimeMixer<B> {
     )]
     pub fn forward_statetune(&self, time_mixer_input: TimeMixerIO<B>) -> TimeMixerIO<B>
     where
-        B: Backend + Mix6Backend + Wkv7Backend,
+        B: Backend
+            + KeyPrepareBackend
+            + GatedReadoutCombineBackend
+            + LearningRateGateBackend
+            + Mix6Backend
+            + ValueResidualGateBackend
+            + crate::kernels::train::time_mixer::weight_decay_transform::WeightDecayTransformBackend
+            + Wkv7Backend,
     {
         let TimeMixerIO {
             embedded_context,
@@ -266,6 +284,7 @@ impl<B: Backend> TimeMixer<B> {
     }
 }
 
+#[derive(Clone)]
 pub struct TimeMixerIO<B: Backend> {
     pub embedded_context: Tensor<B, 3>,
     pub value_from_first_cell: Tensor<B, 3>,
