@@ -1,0 +1,22 @@
+# LM Head Forward Target Logit
+
+- Date: 2026-05-16
+- Branch/worktree: `kernel-tuning-lm-head-forward-row-candidates-20260516` in the existing dirty workspace.
+- Prior-note search command: `rg -n "lm_head|l2wrap|cross_entropy|head_l2wrap|loss|row_kernel|finalize|ncu-loss|memory-bound|0\\.73|0\\.717|0\\.034" .agents/notes/kernel-tuning .agents/skills/kernel-tuning/SKILL.md /root/.codex/memories/MEMORY.md`.
+- Matched prior evidence:
+  - `2026-05-16-local-ncu-forward-slow-kernels.md` says `lm_head_l2wrap_ce_forward_row_kernel_f__i_i32` is the main loss cost, block `(512,1,1)`, grid `(8192,1,1)`, DRAM throughput around `87%`, achieved occupancy around `98%`, and no spilling.
+  - The same note says `lm_head_l2wrap_ce_forward_finalize_kernel_f_` is a small single-block reduction around `13us`, so this attempt should not target finalize first.
+  - `2026-05-16-lm-head-backward-autotune.md` was about backward candidate expansion and does not explain the forward `lm_head` / `loss/l2wrap_cross_entropy` timing rows.
+- Scope: CUDA BF16 `rwkv_lm`, `B=16,T=512,vocab=65536`, fused `lm_head_l2wrap_ce` forward row kernel.
+- Hypothesis: the forward row kernel does an unnecessary block reduction for `target_logit`. Since only the target column contributes, thread 0 can directly load `inputs.logits[row_start + target]` after the denominator reduction. This removes one shared-memory block reduction and a branch from the vocabulary scan without changing the softmax denominator or loss formula.
+- Code change: removed `local_target` accumulation and `block_reduce_sum_f32(local_target, ...)` from `lm_head_l2wrap_ce_forward_row_kernel`; `UNIT_POS == 0` now loads the target logit directly when `target < vocab_size`.
+- Planned commands: `rtk cargo check -p rwkv-nn --features cuda`; then `rtk cargo run --release -p rwkv-test --features cuda -- compare-rwkv-nn --color never --repeat 3 --warmup 1`; then focused ncu if the result is ambiguous.
+- Compile result: `rtk cargo check -p rwkv-nn --features cuda` passed.
+- Compare command: `rtk cargo run --release -p rwkv-test --features cuda -- compare-rwkv-nn --color never --repeat 3 --warmup 1`.
+- Compare result: activation stayed valid (`activation_summary compared=54 passed=54 failed=0`), including `loss/l2wrap_cross_entropy.safetensors` PASS. Timing did not improve: `actual_total_ms=44.706`, baseline `35.957`, speedup `0.80x`; `loss/l2wrap_cross_entropy` was `1.089ms` vs baseline `0.717ms`, `0.66x`, and `lm_head` was `0.118ms` vs `0.034ms`, `0.29x`.
+- Interim interpretation: direct target-logit loading is numerically valid, but end-to-end timing did not improve. Run focused ncu before deciding keep/revert.
+- ncu command: `rtk ncu --target-processes all --kernel-name regex:'.*(lm_head_l2wrap_ce_forward_row|lm_head_l2wrap_ce_forward_finalize).*' --launch-count 12 --section SpeedOfLight --section Occupancy --section MemoryWorkloadAnalysis --section SchedulerStats --section WarpStateStats --csv --log-file target/rwkv-test/ncu-lm-head-target-logit.csv target/release/rwkv-test compare-rwkv-nn --color never --repeat 1 --warmup 1`.
+- ncu result: profiler timing rows are invalid under ncu, but the CSV shows the row kernel stayed around the same floor as the previous loss ncu sample: target-logit direct load row duration `727.9us-749.3us`, DRAM throughput around `87%`, achieved occupancy around `98%`, no local/shared spilling. The prior ncu had one slow row outlier, but its fastest row was also around `730us`; finalize stayed around `13us`.
+- Interpretation: removing the target-logit reduction is numerically valid but does not move the dominant cost. The row kernel remains dominated by the two full-vocab passes and exp/memory traffic, not by the extra target reduction.
+- Decision: negative end-to-end result. Reverted the code back to the original target-logit reduction and keep this branch/note as evidence.
+- Revert validation: `rtk cargo check -p rwkv-nn --features cuda` passed after restoring the original row-kernel target reduction.

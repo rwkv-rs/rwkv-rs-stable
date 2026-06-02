@@ -1,0 +1,50 @@
+# 2026-05-16 gated_readout GroupNorm sumsq variance on GB10
+
+- Branch/worktree: `kernel-tuning-gated-readout-sumsq-variance-gb10-20260516` in `/mnt/g/Projects/Packages/rwkv-rs-stable`.
+- Dirty-tree constraint: this branch inherits the kept `gated_readout` GroupNorm-combine implementation and broad unrelated workspace edits. The new attempt is scoped to `crates/rwkv-nn/src/kernels/train/time_mixer/gated_readout_combine/kernel.rs`.
+- Prior-note search command: `rg -n "gated_readout|gated readout|groupnorm|GroupNorm|combine|block_size|warps|warp32|row-pack|rowpack|64-thread|line_size|vector width|autotune" .agents/notes/kernel-tuning crates/rwkv-nn/src/kernels/train/time_mixer/gated_readout_combine crates/rwkv-nn/src/modules/time_mixer/gated_readout.rs -S`.
+- Matched prior evidence:
+  - `2026-05-16-gated-readout-groupnorm-combine-gb10.md` keeps the fused GroupNorm+combine boundary and remote standard compare passed activation with total speedup above `1.0`.
+  - `2026-05-16-gated-readout-warp32-gb10.md` rejected a one-warp launch geometry.
+  - `2026-05-16-gated-readout-rowpack-gb10.md` rejected row-pack as an end-to-end change even though its target kernel improved.
+  - No prior note found for changing the fused GroupNorm variance formula from two-pass centered variance to sum-of-squares variance inside this kernel.
+- Machine/GPU: performance decision source is remote `10.100.1.253` / GB10. Local GPU must not be used for timing.
+- Backend/runtime: CUDA through Burn/CubeCL.
+- Shape/dtype: `rwkv_lm/bf16/case_000000`, `B=16`, `T=512`, `rows=8192`, `d_model=768`, `num_heads=12`, `head_size=64`, BF16.
+- Kernel/stage: `time_mixer/gated_readout_combine` forward fused GroupNorm+bonus+gate.
+- Candidate parameters: no new launch geometry. This changes the variance algorithm inside the existing `block=(64,1,1)`, `num_warps=2` kernel.
+- Hypothesis: compute `sum` and `sum_squares` from the first per-lane load, then use `variance = E[x^2] - mean^2`. This removes the centered-variance reduction and should reduce per-head synchronization/reduction work.
+- Numerical risk: `E[x^2] - mean^2` is not the same f32 reduction expression as `E[(x-mean)^2]`; it can amplify cancellation. Activation comparison against the real trace is the keep gate.
+- Expected keep/revert boundary: keep only if remote activation passes and standard compare does not regress total or `cells/*/time_mixer`. Revert if activation drifts or timing regresses.
+- Next edit: update only `gated_readout_combine/kernel.rs`, then run local compile/format checks and remote compare on `10.100.1.253`.
+- Code change: `gated_readout_combine_forward_kernel` now computes `local_sum_squares` from the first `wkv_output` load, reduces it next to `sum`, and uses `variance = sum_squares * inv_head_size - mean * mean`. The previous centered-variance local calculation and third reduction were removed. Launch geometry and output contract are unchanged.
+- Next command: local compile/format checks only; no local GPU timing.
+- Local compile check: `cargo check -p rwkv-nn --features cuda,fusion` passed.
+- Local format check: `cargo +nightly fmt --package rwkv-nn --check` passed.
+- Next command: sync scoped files to `10.100.1.253`, build there, then run standard remote compare.
+- Remote sync: scoped `rsync -avR -e 'ssh -i ~/.ssh/id_ed25519_dgx_spark_windows -o BatchMode=yes'` sent `gated_readout_combine/kernel.rs` and this note to `/home/caizus/Projects/Packages/rwkv-rs-stable` on `10.100.1.253`.
+- Next command: remote `cargo check -p rwkv-nn --features cuda,fusion`.
+- Remote compile check: `cargo check -p rwkv-nn --features cuda,fusion` passed on `10.100.1.253`.
+- Next command: remote standard compare against `/home/caizus/Projects/Packages/rwkv-rs-test/test_gen/rwkv_lm/bf16/case_000000` with `--repeat 3 --warmup 1`.
+- Remote compare command: `cargo run --release -p rwkv-test --features cuda -- compare-rwkv-nn --color never --baseline /home/caizus/Projects/Packages/rwkv-rs-test/test_gen/rwkv_lm/bf16/case_000000 --repeat 3 --warmup 1`.
+- Remote compare result: activation passed, `activation_summary compared=54 passed=54 failed=0`.
+- Timing result: `timing_summary compared=76 passed=74 failed=2 missing=0 extra=0 ignored=1 actual_total_ms=72.479 baseline_total_ms=175.887 speedup=2.43x`.
+- Timing failures: existing `timing/cells/cell_0000/channel_mixer.time.json` remained slightly slow (`0.97x`), and `timing/cells/cell_0000/embedded_context_after_time_mixer.time.json` newly failed (`0.74x`).
+- Module totals: `cells/*/time_mixer` was `42.397ms` vs baseline `120.381ms` (`2.84x`). This is essentially tied with the previous kept GroupNorm-combine run (`42.356ms`) and not a clear module improvement.
+- Interpretation: activation is safe, but standard timing evidence is inconclusive/slightly worse by row count. Need targeted `nsys` attribution before deciding keep/revert.
+- Next command: remote `nsys` capture for kernel attribution. The `repeat=1` profiler timing is not an acceptance speedup; it is only to compare `gated_readout_combine_forward_kernel_f_` duration and launch metadata.
+- Remote `nsys` command: `nsys profile --force-overwrite=true --trace=cuda,nvtx,osrt --output target/rwkv-test/nsys-gated-readout-sumsq-variance target/release/rwkv-test compare-rwkv-nn --color never --baseline /home/caizus/Projects/Packages/rwkv-rs-test/test_gen/rwkv_lm/bf16/case_000000 --repeat 1 --warmup 1`.
+- Remote `nsys` result: profiler generated `/home/caizus/Projects/Packages/rwkv-rs-stable/target/rwkv-test/nsys-gated-readout-sumsq-variance.nsys-rep`. The command exited non-zero because the compare timing profile intentionally mismatched baseline repeat count; use only kernel attribution from this capture.
+- Next command: export the `nsys` report to SQLite and query `gated_readout_combine_forward_kernel_f_` launch totals.
+- Remote `nsys` export: generated `target/rwkv-test/nsys-gated-readout-sumsq-variance.sqlite`.
+- Target kernel query: `gated_readout_combine_forward_kernel_f_`, `36` launches, `11.857568ms` total, `329.377us` average, min `318.592us`, max `517.152us`, grid `(8192,12,1)`, block `(64,1,1)`, `registers/thread=26`, dynamic shared memory `8`.
+- Comparison reference: the previous retained 64-thread clean profile was `11.793ms / 36` (`327.6us` average), while the earlier rejected row-pack profile was `11.159ms / 36` but regressed end-to-end. This sumsq candidate does not improve the target kernel under a comparable launch count.
+- Decision: reject and revert this code change. Activation is safe, but the target kernel is not faster and the standard compare has one additional timing-row failure.
+- Next edit: revert only the sumsq variance change in `gated_readout_combine/kernel.rs`, restoring centered variance reduction.
+- Revert edit: `gated_readout_combine/kernel.rs` restored the centered-variance path (`local_variance = (local_value - mean)^2` plus reduction). The branch/note are kept as negative evidence.
+- Next command: local compile/format check after revert, then sync the reverted file back to `10.100.1.253`.
+- Local post-revert compile check: `cargo check -p rwkv-nn --features cuda,fusion` passed.
+- Local post-revert format check: `cargo +nightly fmt --package rwkv-nn --check` passed.
+- Next command: sync reverted `gated_readout_combine/kernel.rs` and this updated note back to `10.100.1.253`.
+- Remote restore sync: scoped `rsync -avR` sent the reverted `gated_readout_combine/kernel.rs` and this updated note back to `/home/caizus/Projects/Packages/rwkv-rs-stable` on `10.100.1.253`.
+- Final keep/revert state: code reverted; branch and note retained as rejected sumsq-variance evidence. No final remote compare was run after revert because the restored file matches the previous kept centered-variance implementation that already passed remote standard compare.

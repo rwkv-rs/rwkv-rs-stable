@@ -1,0 +1,22 @@
+# LayerNorm Hardware Policy
+
+- Date: 2026-05-16
+- Branch/worktree: `kernel-tuning-layernorm-hw-policy-20260516` in the existing dirty workspace.
+- Prior-note search terms: `layer_norm`, `LayerNorm`, `BLOCK_SIZE`, `256`, `512`, `768`, `1024`, `deterministic`, `10.100.1.253`.
+- Matched prior evidence:
+  - `2026-05-16-layernorm-d768-bf16-block512.md`: local BF16 `D=768` block `512` caused activation drift and was reverted.
+  - `2026-05-16-layernorm-d768-bf16-block768.md`: local BF16 `D=768` block `768` was faster but failed accuracy and was reverted.
+  - `2026-05-16-skill-guardrails.md`: local `256` and `512` drift are preserved negative results; current local deterministic boundary remains `1024`.
+  - Memory says remote `10.100.1.253` regenerated-baseline validation accepted `BLOCK_SIZE=256` and reached `speedup=1.49x`, but also says that remote pass does not imply local pass.
+- Machine/GPU: local RTX 5090, `nvidia-smi --query-gpu=name,compute_cap --format=csv,noheader` reports compute capability `12.0`.
+- Remote access: `ssh -o BatchMode=yes -o ConnectTimeout=5 10.100.1.253 ...` failed with `Permission denied (publickey,password)`, so remote hardware fields and current reproducibility are not available in this session.
+- Scope: CUDA BF16 `rwkv_lm`, `B=16,T=512,D=768`, LayerNorm forward.
+- Hypothesis: LayerNorm block-size policy should stay hardware/shape keyed, but the local deterministic guard must keep excluding `256`, `512`, and `768`. A future remote-specific policy can admit `256` only when the remote hardware fingerprint and trace baseline are verified in the current run.
+- Candidate parameters: no low-block candidate is re-enabled on local; the key now includes additional CubeCL-exposed hardware fields `max_cube_dim`, `num_tensor_cores`, and `min_tensor_cores_dim`.
+- Correctness result: local compare passed activation, `activation_summary compared=54 passed=54 failed=0`.
+- Timing/profiler result:
+  - Compile check: `rtk cargo check -p rwkv-nn --features cuda` passed.
+  - Compare command: `rtk cargo run --release -p rwkv-test --features cuda -- compare-rwkv-nn --color never --repeat 3 --warmup 1`.
+  - Compare result: `timing_summary compared=76 passed=6 failed=70 ... actual_total_ms=43.314 baseline_total_ms=35.957 speedup=0.83x`.
+  - LayerNorm-specific result: `layer_norm0` passed timing at `0.130ms` vs baseline `0.194ms`, `1.49x`, but per-cell pre-layer-norm timings still failed and total timing remains below `1.0x`.
+- Decision: keep the hardware-key expansion because it is correctness-safe and moves the LayerNorm key closer to hardware/shape dispatch. Do not admit `256`, `512`, or `768` on local BF16 `D=768` without a project-level accuracy guard or current remote verification.

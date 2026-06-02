@@ -8,14 +8,14 @@
 )))]
 mod fallback {
     use burn::{
-        backend::autodiff::{checkpoint::strategy::CheckpointStrategy, Autodiff},
-        tensor::{ops::FloatTensor, Tensor, TensorPrimitive},
+        backend::autodiff::{Autodiff, checkpoint::strategy::CheckpointStrategy},
+        tensor::{Tensor, TensorPrimitive, ops::FloatTensor},
     };
 
     use crate::kernels::train::channel_mixer::{
+        ChannelMixerBackend,
         channel_mixer_reference,
         io::{ChannelMixerForwardInputs, ChannelMixerForwardPrimitiveInputs},
-        ChannelMixerBackend,
     };
 
     impl<B, C> ChannelMixerBackend for Autodiff<B, C>
@@ -63,48 +63,49 @@ mod fallback {
 mod cube_impl {
     use burn::{
         backend::autodiff::{
+            Autodiff,
             checkpoint::{base::Checkpointer, strategy::CheckpointStrategy},
             grads::Gradients,
             ops::{Backward, Ops, OpsKind},
-            Autodiff,
         },
         tensor::{
-            ops::{FloatTensor, FloatTensorOps},
             Shape,
+            ops::{FloatTensor, FloatTensorOps},
         },
     };
     use burn_cubecl::{
-        cubecl::{
-            calculate_cube_count_elemwise,
-            prelude::*,
-            tensor_vector_size_parallel,
-            tune::{
-                anchor,
-                local_tuner,
-                AutotuneKey,
-                AutotuneOutput,
-                LocalTuner,
-                Tunable,
-                TunableSet,
-                TuneGroup,
-            },
-            CubeCount,
-            CubeDim,
-        },
-        element::BoolElement,
-        ops::numeric::{empty_device, zeros_client},
-        tensor::CubeTensor,
         CubeBackend,
         CubeElement,
         CubeRuntime,
         CubeTuneId,
         FloatElement,
         IntElement,
+        cubecl::{
+            CubeCount,
+            CubeDim,
+            calculate_cube_count_elemwise,
+            prelude::*,
+            tensor_vector_size_parallel,
+            tune::{
+                AutotuneKey,
+                AutotuneOutput,
+                LocalTuner,
+                Tunable,
+                TunableSet,
+                TuneGroup,
+                anchor,
+                local_tuner,
+            },
+        },
+        element::BoolElement,
+        ops::numeric::{empty_device, zeros_client},
+        tensor::CubeTensor,
     };
     use serde::{Deserialize, Serialize};
 
     use crate::kernels::train::{
         channel_mixer::{
+            ChannelMixerBackend,
             forward,
             io::{ChannelMixerBackwardPrimitiveOutputs, ChannelMixerForwardPrimitiveInputs},
             kernel::{
@@ -112,9 +113,8 @@ mod cube_impl {
                 channel_mixer_mix_backward_partial_kernel,
                 channel_mixer_relu_square_backward_from_output_kernel,
             },
-            ChannelMixerBackend,
         },
-        layout::{assert_linear_readable, CubeHardwareFingerprint},
+        layout::{CubeHardwareFingerprint, assert_linear_readable},
     };
 
     impl<R, F, I, BT, C> ChannelMixerBackend for Autodiff<CubeBackend<R, F, I, BT>, C>
@@ -146,8 +146,12 @@ mod cube_impl {
                     grads: &mut Gradients,
                     _checkpointer: &mut Checkpointer,
                 ) {
-                    let [node_embedded_context, node_key_scale, node_key_weight, node_value_weight] =
-                        ops.parents;
+                    let [
+                        node_embedded_context,
+                        node_key_scale,
+                        node_key_weight,
+                        node_value_weight,
+                    ] = ops.parents;
                     let output_grad = grads.consume::<CubeBackend<R, F, I, BT>>(&ops.node);
                     let ChannelMixerBackwardState {
                         embedded_context,

@@ -1,29 +1,29 @@
 use burn::tensor::DType;
 use burn_cubecl::{
-    cubecl::{
-        calculate_cube_count_elemwise,
-        prelude::*,
-        tensor_vector_size_parallel,
-        tune::{
-            anchor,
-            local_tuner,
-            AutotuneKey,
-            AutotuneOutput,
-            LocalTuner,
-            Tunable,
-            TunableSet,
-            TuneGroup,
-        },
-    },
-    element::BoolElement,
-    ops::numeric::empty_device,
-    tensor::CubeTensor,
     CubeBackend,
     CubeElement,
     CubeRuntime,
     CubeTuneId,
     FloatElement,
     IntElement,
+    cubecl::{
+        calculate_cube_count_elemwise,
+        prelude::*,
+        tensor_vector_size_parallel,
+        tune::{
+            AutotuneKey,
+            AutotuneOutput,
+            LocalTuner,
+            Tunable,
+            TunableSet,
+            TuneGroup,
+            anchor,
+            local_tuner,
+        },
+    },
+    element::BoolElement,
+    ops::numeric::empty_device,
+    tensor::CubeTensor,
 };
 use serde::{Deserialize, Serialize};
 
@@ -31,7 +31,7 @@ use crate::kernels::train::{
     layout::CubeHardwareFingerprint,
     time_mixer::mix6::{
         io::{Mix6ForwardPrimitiveInputs, Mix6ForwardPrimitiveOutput},
-        kernel::{mix6_forward_kernel, Mix6ForwardInputsLaunch, Mix6ForwardOutputsLaunch},
+        kernel::{Mix6ForwardInputsLaunch, Mix6ForwardOutputsLaunch, mix6_forward_kernel},
     },
 };
 
@@ -256,10 +256,10 @@ pub(crate) fn fused_mix6<
 mod fusion_impl {
     use burn::tensor::{Element, Shape};
     use burn_fusion::{
-        stream::{Operation, OperationStreams},
         Fusion,
         FusionBackend,
         FusionRuntime,
+        stream::{Operation, OperationStreams},
     };
     use burn_ir::{CustomOpIr, HandleContainer, OperationIr, TensorIr};
 
@@ -296,8 +296,23 @@ mod fusion_impl {
                     >,
                 ) {
                     let (
-                        [embedded_context, receptance_scale, weight_decay_scale, key_scale, value_scale, learning_rate_scale, gate_scale],
-                        [receptance_input_out, weight_decay_input_out, key_input_out, value_input_out, learning_rate_input_out, gate_input_out],
+                        [
+                            embedded_context,
+                            receptance_scale,
+                            weight_decay_scale,
+                            key_scale,
+                            value_scale,
+                            learning_rate_scale,
+                            gate_scale,
+                        ],
+                        [
+                            receptance_input_out,
+                            weight_decay_input_out,
+                            key_input_out,
+                            value_input_out,
+                            learning_rate_input_out,
+                            gate_input_out,
+                        ],
                     ) = self.desc.as_fixed();
 
                     let output = B1::fused_mix6(Mix6ForwardPrimitiveInputs {

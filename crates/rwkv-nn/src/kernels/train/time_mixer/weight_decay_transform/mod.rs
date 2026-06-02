@@ -3,7 +3,11 @@ mod forward;
 pub mod io;
 mod kernel;
 
-use burn::tensor::{Tensor, TensorPrimitive, activation::softplus, ops::FloatTensor};
+use burn::{
+    backend::autodiff::{Autodiff, checkpoint::strategy::CheckpointStrategy},
+    prelude::Backend,
+    tensor::{Tensor, TensorPrimitive, activation::softplus, ops::FloatTensor},
+};
 use burn_cubecl::{
     CubeBackend,
     CubeElement,
@@ -46,6 +50,23 @@ where
     }
 }
 
+impl<B, C> WeightDecayTransformBackend for Autodiff<B, C>
+where
+    B: Backend,
+    C: CheckpointStrategy,
+{
+    fn fused_weight_decay_transform(
+        inputs: WeightDecayTransformForwardPrimitiveInputs<Self>,
+    ) -> FloatTensor<Self> {
+        weight_decay_transform_reference(
+            Tensor::<Self, 1>::from_primitive(TensorPrimitive::Float(inputs.weight_decay_base)),
+            Tensor::<Self, 3>::from_primitive(TensorPrimitive::Float(inputs.weight_decay_input)),
+        )
+        .into_primitive()
+        .tensor()
+    }
+}
+
 /// Runs the fused RWKV7 weight-decay transform after validating the public input contract.
 pub fn weight_decay_transform_custom<B: WeightDecayTransformBackend>(
     inputs: WeightDecayTransformForwardInputs<B>,
@@ -57,20 +78,20 @@ pub fn weight_decay_transform_custom<B: WeightDecayTransformBackend>(
 }
 
 /// Computes the weight-decay transform with regular Burn tensor operations.
-pub fn weight_decay_transform_reference<B: WeightDecayTransformBackend>(
-    inputs: WeightDecayTransformForwardInputs<B>,
+pub fn weight_decay_transform_reference<B: Backend>(
+    weight_decay_base: Tensor<B, 1>,
+    weight_decay_input: Tensor<B, 3>,
 ) -> Tensor<B, 3> {
     -softplus(
-        -(inputs.weight_decay_input
-            + inputs
-                .weight_decay_base
+        -(weight_decay_input
+            + weight_decay_base
                 .unsqueeze_dim::<2>(0)
                 .unsqueeze_dim::<3>(0)),
         1.0,
     ) - 0.5
 }
 
-/// Convenience wrapper for the fused weight-decay transform path.
+/// Convenience wrapper for the differentiable weight-decay transform path.
 pub fn weight_decay_transform<B: WeightDecayTransformBackend>(
     weight_decay_base: Tensor<B, 1>,
     weight_decay_input: Tensor<B, 3>,

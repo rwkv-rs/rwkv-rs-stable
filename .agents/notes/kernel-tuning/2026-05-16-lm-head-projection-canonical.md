@@ -1,0 +1,44 @@
+# 2026-05-16 lm_head projection canonical timing
+
+- Branch/worktree: `kernel-tuning-lm-head-projection-canonical-20260516` in `/mnt/g/Projects/Packages/rwkv-rs-stable`.
+- Dirty-tree constraint: this checkout carries broad unrelated workspace and kernel tuning changes. This attempt is scoped to `crates/rwkv-test` timing/trace contract files unless source inspection proves another file is required.
+- Prior search command: `rg -n "completion|current-goal|autotune key|LocalTuner|ncu|ERR_NVGPUCTRPERM|speedup=|activation_summary|timing_summary|LayerNorm|ordered-256|10\\.100\\.1\\.253|local" .agents/notes/kernel-tuning .agents/skills/kernel-tuning/SKILL.md /root/.codex/memories/MEMORY.md -S`.
+- Matched evidence:
+  - `2026-05-16-lm-head-projection-timing-contract.md` emits `timing/lm_head/projection.time.json` from the actual `rwkv-nn` trace and records it as ignored against old baselines.
+  - `2026-05-16-lm-head-projection-timing-boundary.md` and `2026-05-16-lm-head-projection-loss-fusion-analysis.md` show `lm_head.time.json` previously excluded the large unembed projection matmul even though remote `nsys` shows it as one of the largest GPU surfaces.
+  - `2026-05-16-completion-audit-after-sumsq.md` marks this as a measurement-coverage gap before further kernel implementation work.
+- Machine/GPU: no local GPU timing in this branch. Remote `10.100.1.253` may be used later only for compare validation after code compiles.
+- Backend/runtime: timing contract for CUDA BF16 train-forward trace, but code should stay backend-neutral.
+- Shape/dtype: `rwkv_lm/bf16/case_000000`, `B=16`, `T=512`, `rows=8192`, `d_model=768`, vocab `65536`.
+- Changed boundary: make `lm_head/projection` comparable only if both actual and baseline traces can provide the same timing row. Do not write `lm_head/logits.safetensors` just to expose timing.
+- Hypothesis: promoting `lm_head/projection` from ignored extra timing to canonical comparable timing will make `.time.json` acceptance cover the largest lm-head projection surface seen in `nsys`, reducing the chance of optimizing around an invisible bottleneck.
+- Expected keep/revert boundary: keep only if focused timing tests pass and remote compare with the existing baseline either still ignores the row when baseline is missing or compares it when baseline exists. Revert if old baselines break as missing/extra canonical failures.
+- Next command: inspect `crates/rwkv-test/src/rwkv_nn_trace/writer.rs`, `crates/rwkv-test/src/timing.rs`, and timing tests to find the current canonical/ignored boundary.
+- Source inspection result:
+  - `TraceWriter::forward` already records `lm_head/projection` via `trace_float_timing(...)` and does not write logits.
+  - `timing.rs::is_canonical_timing_module` excludes `lm_head/projection`, so it is ignored even when actual and baseline both have the row.
+  - Existing test `compare_timing_uses_only_canonical_compute_rows` asserts an actual-only `lm_head/projection` row is ignored.
+- Implementation plan: add optional comparable timing semantics for `lm_head/projection`: compare it when both actual and baseline contain the row; count it as ignored when only one side contains it. Keep existing required canonical behavior unchanged for established modules.
+- Next edit: update `crates/rwkv-test/src/timing.rs` and focused timing tests.
+- Code change:
+  - Replaced the boolean canonical predicate with `TimingModuleKind::{Required, Optional, Ignored}`.
+  - `lm_head/projection` is optional: it is compared only when present in both actual and baseline, otherwise counted as ignored.
+  - Added a focused test proving optional projection is compared when both sides provide it. Existing actual-only projection behavior remains covered by the existing ignored-row test.
+- Next command: run focused `rwkv-test` timing tests and formatting/check gates.
+- Focused timing tests: `cargo test -p rwkv-test timing --lib` passed, `7 passed`.
+- Compile check: `cargo check -p rwkv-test --features cuda` passed.
+- Initial format check: `cargo +nightly fmt --package rwkv-test --check` failed only on rustfmt line wrapping in `timing.rs`.
+- Format fix: `cargo +nightly fmt --package rwkv-test` passed.
+- Next command: rerun `cargo +nightly fmt --package rwkv-test --check`, then remote compare against the existing GB10 baseline to verify old baselines still ignore one-sided `lm_head/projection`.
+- Final format check: `cargo +nightly fmt --package rwkv-test --check` passed.
+- Next command: sync only `crates/rwkv-test/src/timing.rs`, `crates/rwkv-test/src/timing/tests.rs`, and this note to `10.100.1.253`, then run remote `cargo check -p rwkv-test --features cuda` and standard compare.
+- Remote sync: scoped `rsync -avR` sent `crates/rwkv-test/src/timing.rs`, `crates/rwkv-test/src/timing/tests.rs`, and this note to `/home/caizus/Projects/Packages/rwkv-rs-stable` on `10.100.1.253`.
+- Next command: remote `cargo check -p rwkv-test --features cuda`.
+- Remote compile check: `cargo check -p rwkv-test --features cuda` passed on `10.100.1.253`.
+- Next command: remote standard compare with existing regenerated GB10 baseline. Expected timing contract behavior: `lm_head/projection` remains ignored because current baseline does not have that row.
+- Remote compare command: `cargo run --release -p rwkv-test --features cuda -- compare-rwkv-nn --color never --baseline /home/caizus/Projects/Packages/rwkv-rs-test/test_gen/rwkv_lm/bf16/case_000000 --repeat 3 --warmup 1`.
+- Remote compare result: activation passed, `activation_summary compared=54 passed=54 failed=0`.
+- Timing contract result: `timing_summary compared=76 passed=74 failed=2 missing=0 extra=0 ignored=1 actual_total_ms=74.866 baseline_total_ms=175.887 speedup=2.35x`.
+- Contract interpretation: the old baseline still works because one-sided `lm_head/projection` is counted in `ignored=1`, not as missing/extra canonical failure.
+- Timing caveat: the two failed rows were `cells/cell_0000/channel_mixer` and `cells/cell_0009/pre_layer_norm_for_channel_mix`. This branch did not change kernels or timing scopes for those rows; treat them as ordinary remote timing variance/remaining kernel noise, not as projection-contract failures.
+- Keep decision: keep this timing-contract change. It makes `lm_head/projection` comparable when both actual and baseline traces have it while preserving compatibility with older baselines.

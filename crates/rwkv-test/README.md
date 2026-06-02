@@ -56,7 +56,7 @@ the JSON `module` field. Each timing JSON must include `module`, positive
 rounded average equals `elapsed_ns`. The summary includes modules such as embedding, layer
 norm, time mixer, channel mixer, residual adds, LM-head hidden state, and loss.
 It ignores input metadata and auxiliary activations such as
-`embedding/token_ids.safetensors`, `time_mixer/value_from_first_cell.safetensors`,
+`embedding/token_ids.safetensors`, `cell_0000/time_mixer/value_from_first_cell.safetensors`,
 and loss helper tensors because those files either do not measure compute or
 are outputs of a module that already has one timing record. Missing canonical
 timing on either side fails the timing comparison.

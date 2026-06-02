@@ -1,20 +1,20 @@
-use burn::tensor::{ops::FloatTensor, DType};
+use burn::tensor::{DType, ops::FloatTensor};
 use burn_cubecl::{
-    cubecl::{
-        prelude::*,
-        tune::{anchor, local_tuner, AutotuneKey, LocalTuner, Tunable, TunableSet, TuneGroup},
-        CubeCount,
-        CubeDim,
-    },
-    element::BoolElement,
-    ops::numeric::empty_device,
-    tensor::CubeTensor,
     CubeBackend,
     CubeElement,
     CubeRuntime,
     CubeTuneId,
     FloatElement,
     IntElement,
+    cubecl::{
+        CubeCount,
+        CubeDim,
+        prelude::*,
+        tune::{AutotuneKey, LocalTuner, Tunable, TunableSet, TuneGroup, anchor, local_tuner},
+    },
+    element::BoolElement,
+    ops::numeric::empty_device,
+    tensor::CubeTensor,
 };
 use serde::{Deserialize, Serialize};
 
@@ -234,6 +234,89 @@ where
     }
 
     output
+}
+
+#[cfg(feature = "fusion")]
+mod fusion_impl {
+    use burn::tensor::Element;
+    use burn_fusion::{
+        Fusion,
+        FusionBackend,
+        FusionRuntime,
+        stream::{Operation, OperationStreams},
+    };
+    use burn_ir::{CustomOpIr, HandleContainer, OperationIr, TensorIr};
+
+    use super::*;
+    use crate::kernels::train::layer_norm::LayerNormBackend;
+
+    impl<B: FusionBackend + LayerNormBackend> LayerNormBackend for Fusion<B> {
+        fn fused_layer_norm(inputs: LayerNormPrimitiveInputs<Self>) -> FloatTensor<Self> {
+            let LayerNormPrimitiveInputs {
+                input,
+                gamma,
+                beta,
+                epsilon,
+            } = inputs;
+            let client = input.client.clone();
+            let shape = input.shape.clone();
+
+            #[derive(Clone, Debug)]
+            struct LayerNormOp<B1> {
+                desc: CustomOpIr,
+                epsilon: f64,
+                _backend: core::marker::PhantomData<B1>,
+            }
+
+            impl<B1: FusionBackend + LayerNormBackend> Operation<B1::FusionRuntime> for LayerNormOp<B1> {
+                fn execute(
+                    &self,
+                    handles: &mut HandleContainer<
+                        <B1::FusionRuntime as FusionRuntime>::FusionHandle,
+                    >,
+                ) {
+                    let ([input, gamma, beta], [output_out]) = self.desc.as_fixed();
+
+                    let output = B1::fused_layer_norm(LayerNormPrimitiveInputs {
+                        input: handles.get_float_tensor::<B1>(input),
+                        gamma: handles.get_float_tensor::<B1>(gamma),
+                        beta: handles.get_float_tensor::<B1>(beta),
+                        epsilon: self.epsilon,
+                    });
+
+                    handles.register_float_tensor::<B1>(&output_out.id, output);
+                }
+            }
+
+            let mut streams = OperationStreams::default();
+            streams.tensor(&input);
+            streams.tensor(&gamma);
+            streams.tensor(&beta);
+
+            let output_desc = [TensorIr::uninit(
+                client.create_empty_handle(),
+                shape,
+                B::FloatElem::dtype(),
+            )];
+
+            let desc = CustomOpIr::new(
+                "fused_layer_norm",
+                &[input.into_ir(), gamma.into_ir(), beta.into_ir()],
+                &output_desc,
+            );
+
+            let op = LayerNormOp::<B> {
+                desc,
+                epsilon,
+                _backend: core::marker::PhantomData,
+            };
+
+            client
+                .register(streams, OperationIr::Custom(op.desc.clone()), op)
+                .pop()
+                .expect("missing fused_layer_norm output")
+        }
+    }
 }
 
 fn max_address_type<R: CubeRuntime>(tensors: &[&CubeTensor<R>]) -> AddressType {

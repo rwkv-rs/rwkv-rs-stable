@@ -1,20 +1,20 @@
-use burn::tensor::{ops::FloatTensor, DType, Shape};
+use burn::tensor::{DType, Shape, ops::FloatTensor};
 use burn_cubecl::{
-    cubecl::{
-        prelude::*,
-        tune::{anchor, local_tuner, AutotuneKey, LocalTuner, Tunable, TunableSet, TuneGroup},
-        CubeCount,
-        CubeDim,
-    },
-    element::BoolElement,
-    ops::numeric::empty_device,
-    tensor::CubeTensor,
     CubeBackend,
     CubeElement,
     CubeRuntime,
     CubeTuneId,
     FloatElement,
     IntElement,
+    cubecl::{
+        CubeCount,
+        CubeDim,
+        prelude::*,
+        tune::{AutotuneKey, LocalTuner, Tunable, TunableSet, TuneGroup, anchor, local_tuner},
+    },
+    element::BoolElement,
+    ops::numeric::empty_device,
+    tensor::CubeTensor,
 };
 use serde::{Deserialize, Serialize};
 
@@ -23,9 +23,9 @@ use crate::kernels::train::{
     lm_head_l2wrap_ce::{
         io::LmHeadL2WrapCePrimitiveInputs,
         kernel::{
+            LmHeadL2WrapCeInputsLaunch,
             lm_head_l2wrap_ce_forward_finalize_kernel,
             lm_head_l2wrap_ce_forward_row_kernel,
-            LmHeadL2WrapCeInputsLaunch,
         },
     },
 };
@@ -134,10 +134,10 @@ pub(crate) fn fused_lm_head_l2wrap_ce<
 mod fusion_impl {
     use burn::tensor::Element;
     use burn_fusion::{
-        stream::{Operation, OperationStreams},
         Fusion,
         FusionBackend,
         FusionRuntime,
+        stream::{Operation, OperationStreams},
     };
     use burn_ir::{CustomOpIr, HandleContainer, OperationIr, TensorIr};
 

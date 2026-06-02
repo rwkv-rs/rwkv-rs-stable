@@ -16,6 +16,7 @@ use crate::kernels::train::{
     channel_mixer::ChannelMixerBackend,
     layer_norm::LayerNormBackend,
     lm_head_l2wrap_ce::LmHeadL2WrapCeBackend,
+    residual_add::ResidualAddBackend,
     time_mixer::{
         gated_readout_combine::GatedReadoutCombineBackend,
         key_prepare::KeyPrepareBackend,
@@ -33,6 +34,7 @@ pub trait TrainBackend:
     + ChannelMixerBackend
     + LayerNormBackend
     + LmHeadL2WrapCeBackend
+    + ResidualAddBackend
     + GatedReadoutCombineBackend
     + KeyPrepareBackend
     + LearningRateGateBackend
@@ -48,6 +50,7 @@ impl<B> TrainBackend for B where
         + ChannelMixerBackend
         + LayerNormBackend
         + LmHeadL2WrapCeBackend
+        + ResidualAddBackend
         + GatedReadoutCombineBackend
         + KeyPrepareBackend
         + LearningRateGateBackend

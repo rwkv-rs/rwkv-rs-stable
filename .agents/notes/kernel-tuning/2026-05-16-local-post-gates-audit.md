@@ -1,0 +1,33 @@
+# Local Post Gates Audit
+
+- Date: 2026-05-16.
+- Branch/worktree: `kernel-tuning-local-post-gates-audit-20260516` in the existing dirty workspace.
+- Dirty-tree constraint: this checkout carries broad unrelated uncommitted workspace changes plus the kept gate-wiring code from `kernel-tuning-wire-time-mixer-gates-gb10-20260516`. This branch is read-only profiling/attribution; it must not edit kernel code.
+- Prior-note search command:
+  - `rg -n "channel_mixer|pre_layer_norm|layer_norm|residual|embedded_context_after|lm_head|l2wrap|post-gates|gate wiring|Burn reference|forced Cube|target-logit|atomic|online-softmax" .agents/notes/kernel-tuning .agents/skills/kernel-tuning/SKILL.md /root/.codex/memories/MEMORY.md -S`
+- Matched prior evidence:
+  - `2026-05-16-wire-time-mixer-gates-gb10.md` shows the current gate wiring passes remote timing at `1.92x`, while the local continuation keeps activation valid but remains at `0.77x`; TimeMixer itself is now locally over baseline at `1.02x`.
+  - Residual-add/Burn-add and residual call-site wiring are duplicate-guarded by the skill and `2026-05-16-wire-custom-residual-add.md`; this branch must not rerun residual implementation A/B.
+  - Channel mixer Burn-reference, forced Cube, direct LocalTuner bypass, and matmul-fusion designs already have negative notes; this branch must not repeat those implementation attempts.
+  - lm-head target-logit, prune-256, atomic-loss, and online-softmax attempts already have local or remote negative notes; this branch must not repeat those row-kernel designs.
+- Machine/GPU: local CUDA machine, BF16 trace fixture.
+- Shape/dtype: CUDA BF16 `rwkv_lm`, `B=16,T=512,D=768`, rows `8192`, local baseline from `crates/rwkv-test/test_data/rwkv_lm/bf16/case_000000`.
+- Kernel/stage: post-gates full forward attribution for the remaining local timing blockers: channel mixer, pre-layer norm, residual timing rows, lm_head, and l2wrap CE.
+- Hypothesis: the local post-gates failure is no longer a TimeMixer gate problem. A short CUDA timeline should identify whether the remaining delta is dominated by project-owned custom kernels, Burn/Cubek matmul, timing wrapper boundaries, or small-launch overhead before any implementation branch is opened.
+- Candidate parameters: none. Read-only profiler run only.
+- Expected keep/revert boundary: keep profiler output and this note as evidence. Compare timings emitted under profiler instrumentation are invalid for speedup acceptance; use only CUDA kernel attribution and the already recorded standard local compare for acceptance status.
+- Next command: run `nsys profile --trace=cuda,nvtx --stats=true --force-overwrite=true -o target/rwkv-test/nsys-local-post-gates target/release/rwkv-test compare-rwkv-nn --color never --repeat 1 --warmup 1`.
+- Nsys result: generated `target/rwkv-test/nsys-local-post-gates.{nsys-rep,sqlite}`. The command exited nonzero because compare timing used `repeat=1` against the `repeat=3` baseline and every timing row reported a profile mismatch; activation still passed (`activation_summary compared=54 passed=54 failed=0`). Treat timing rows from this run as invalid for acceptance.
+- CUDA kernel attribution:
+  - BF16 Cubek matmul dominates the local GPU timeline: `matmul_entry_lhs_bf16_lhs_size_1_rhs_bf16_rhs_size_1_acc_bf16_acc_size_8` totals `30.689ms / 75`, and `matmul_entry_lhs_bf16_lhs_size_8_rhs_bf16_rhs_size_8_acc_bf16_acc_size_8` totals `19.063ms / 426`.
+  - `wkv7_pretrain_forward_output_kernel_f_bf16` totals `16.502ms / 36`.
+  - `layer_norm_forward_kernel_f_` totals `6.915ms / 91`, which is still a real local surface even though `layer_norm0` passes in the standard timing rows.
+  - `lm_head_l2wrap_ce_forward_row_kernel_f__i_i32` totals `2.605ms / 3`; finalize remains tiny at `0.035ms / 3`.
+  - The newly wired gate kernels are no longer a major local surface: `value_residual_gate_forward_kernel_f__n_1` totals `0.641ms / 33`, and `learning_rate_gate_forward_kernel_f__n_8` totals `0.210ms / 36`.
+  - Generic f32 elementwise stayed low after wiring: `kernel_scalar_binop_c_f32_n_4` and `unary_float_f_f32_n_4` are each about `0.22ms / 108`.
+- Interpretation: the local post-gates failure is mostly Cubek/Burn BF16 matmul plus known WKV7/LayerNorm/lm-head surfaces, not the learning-rate/value-residual gate path. Channel-mixer and lm-head row designs already have duplicate-guarded negative implementation notes, so the next implementation branch should either target a changed LayerNorm numerical policy under the new post-gates boundary or a new GatedReadout combine kernel with full backward coverage. Do not rerun residual-add, channel-mixer forced Cube/Burn-reference, LocalTuner bypass, lm-head target-logit, atomic, online-softmax, or prune-256.
+- Follow-up source/cache inspection:
+  - `crates/rwkv-nn/src/kernels/train/channel_mixer/forward.rs` still routes channel mixer through the project-owned mix/ReLU-square kernels around two `CubeBackend::float_matmul` calls.
+  - Current channel-mixer elementwise autotune logs have hardware-rich keys and select `line_size_2` for mix and `line_size_8` for ReLU-square on the local CC 12.0 key.
+  - Cubek matmul autotune logs show the large `m=512,n=65536,k=1024` lm-head projection selected TMA (`matmul_specialized_tma_mma`, median about `4.607ms`), while medium channel/time projection shapes select cyclic/ordered MMA/CMMA variants. This reinforces that the largest local surfaces are Cubek-selected matmuls, not the gate kernels just wired.
+- Decision: close this branch as read-only attribution. The next code branch should be small and explicitly different from recorded negatives; the best low-risk candidate is revalidating the local-only LayerNorm ordered-256 numerical policy under the new post-gates tree, because it has prior local correctness and ncu evidence and does not touch residual/channel/lm-head duplicate-guarded designs.

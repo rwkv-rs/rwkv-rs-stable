@@ -1,0 +1,97 @@
+[package]
+name = "rwkv-train"
+authors = ["caizus <18930215187@163.com>"]
+categories = ["science", "algorithms", "command-line-utilities"]
+keywords = ["rwkv", "llm", "training", "deep-learning", "burn"]
+
+description = "Distributed training CLI orchestrating data pipelines, Burn trainers, and logging tools"
+documentation = "https://docs.rs/rwkv"
+repository = "https://github.com/rwkv-rs/rwkv-rs"
+
+rust-version = "1.95"
+autobenches = false
+
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+version.workspace = true
+
+[features]
+wgpu = ["burn/wgpu", "rwkv-nn/wgpu"]
+vulkan = ["wgpu", "rwkv-nn/vulkan"]
+webgpu = ["wgpu", "rwkv-nn/webgpu"]
+metal = ["wgpu", "rwkv-nn/metal"]
+cuda = ["rwkv-nn/cuda"]
+rocm = ["rwkv-nn/rocm"]
+cpu = ["rwkv-nn/cpu"]
+
+collective = ["burn/collective", "burn-optim/collective", "burn-train/ddp"]
+fusion = ["dep:burn-fusion", "rwkv-nn/fusion"]
+autotune = ["rwkv-nn/autotune"]
+autotune-checks = ["rwkv-nn/autotune-checks"]
+tui = ["burn/tui"]
+metrics = ["burn/metrics"]
+
+trace = [
+    "dep:tracing",
+    "rwkv-nn/trace",
+]
+
+[dependencies]
+# === CLI & GUI ===
+clap = { workspace = true, features = ["color", "derive", "error-context", "help", "std", "suggestions", "usage"] }
+dialoguer = { workspace = true }
+indicatif = { workspace = true }
+
+# === Log & Trace ===
+clia-tracing-config = { workspace = true }
+log = { workspace = true }
+tracing = { workspace = true, features = ["std"], optional = true }
+
+# === Date & Time ===
+chrono = { workspace = true, features = ["clock", "std"] }
+
+# === Text Processing ===
+regex = { workspace = true }
+
+# === Math & Algorithms ===
+primes = { workspace = true }
+
+# === Deep Learning Core ===
+burn = { workspace = true, default-features = false, features = ["std", "train", "autodiff", "dataset"] }
+burn-train = { workspace = true, default-features = false }
+burn-optim = { workspace = true, default-features = false, features = ["std"] }
+burn-fusion = { workspace = true, default-features = false, optional = true }
+burn-cubecl = { workspace = true, default-features = false, features = ["std"] }
+burn-ndarray = { workspace = true, default-features = false }
+burn-store = { workspace = true, default-features = false, features = ["std", "burnpack"] }
+
+# === Performance ===
+tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
+rayon = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+
+# === Data Structures ===
+hashbrown = { workspace = true }
+
+# === File ===
+toml = { workspace = true }
+
+# === Serialization ===
+serde = { workspace = true, features = ["derive", "std"] }
+
+# === Database ===
+redb = { workspace = true }
+redis = { workspace = true }
+
+# === Monitoring ===
+wandb = { workspace = true }
+
+# === Macro ===
+derive-new = { workspace = true }
+
+# === Local Dependencies ===
+rwkv-nn = { path = "../rwkv-nn", default-features = false }
+rwkv-data = { path = "../rwkv-data", default-features = false }
+rwkv-config = { path = "../rwkv-config", default-features = false, features = ["model", "train"] }

@@ -1,0 +1,24 @@
+# LM Head Forward Atomic Loss Attempt
+
+- Date: 2026-05-16.
+- Branch/worktree: `kernel-tuning-lm-head-forward-atomic-loss-20260516` in the existing dirty workspace.
+- Dirty-tree constraint: this checkout already carries uncommitted kernel, skill, and fixture changes from earlier tuning attempts. This attempt is scoped to `lm_head_l2wrap_ce` forward loss aggregation.
+- Prior-note search command: `rg -n "lm_head|l2wrap|head_chunk|row_kernel|vector|BLOCK|block_size|num_warps|autotune" .agents/notes/kernel-tuning /root/.codex/memories/MEMORY.md`.
+- Matched prior evidence:
+  - `2026-05-16-local-ncu-forward-slow-kernels.md` and `2026-05-16-forward-slowgroup-current-ncu.md` show `lm_head_l2wrap_ce_forward_row_kernel_f__i_i32` is memory-bound over the full vocab scan, with high DRAM throughput and no spilling.
+  - `2026-05-16-lm-head-forward-target-logit.md` already tried removing the target-logit reduction and did not improve timing, so this branch must not repeat that as the main hypothesis.
+  - `2026-05-16-lm-head-forward-hardware-key.md` expanded the forward autotune key; this branch is an implementation experiment, not another key-only change.
+- Machine/GPU: local CUDA machine, same BF16 `rwkv_lm` trace fixture unless command output says otherwise.
+- Kernel/stage: CUDA BF16 `lm_head_l2wrap_ce` forward, shape `B=16,T=512,rows=8192,vocab=65536`.
+- Hypothesis: the current two-stage loss path writes one row loss per token to global memory and then launches a single-block finalize reduction. For this small `num_tokens=8192`, using one atomic add per row into a zeroed scalar loss may remove the row-loss global write/read and the finalize launch. It can be slower if atomic contention or nondeterministic accumulation dominates; correctness and ncu metrics decide.
+- Candidate parameters: keep existing block-size autotune candidates `[256,512,1024]`; add a separate implementation candidate conceptually named `atomic_loss` only inside this branch.
+- Code change: added `lm_head_l2wrap_ce_forward_atomic_loss_kernel` and added `block_{256,512,1024}_atomic_loss` forward tunables. The atomic path keeps the existing two-pass max/sum row computation but uses one f32 `fetch_add` into a zeroed scalar loss instead of writing `row_losses` and launching finalize.
+- Compile result: `cargo +nightly fmt --all` passed; `rtk cargo check -p rwkv-nn --features cuda` passed.
+- Compare command: `rtk cargo run --release -p rwkv-test --features cuda -- compare-rwkv-nn --color never --repeat 3 --warmup 1`.
+- Correctness result: activation passed, `activation_summary compared=54 passed=54 failed=0`; `loss/l2wrap_cross_entropy.safetensors` passed with `max_abs=1.261044e-2`.
+- Timing result: still below target, `timing_summary compared=76 passed=9 failed=67 ... actual_total_ms=43.254 baseline_total_ms=35.957 speedup=0.83x`. `loss/l2wrap_cross_entropy` was `0.988ms` vs baseline `0.717ms`, `0.73x`; `lm_head` was `0.158ms` vs `0.034ms`, `0.22x`.
+- ncu command: `rtk ncu --target-processes all --kernel-name regex:'.*(lm_head_l2wrap_ce_forward_row|lm_head_l2wrap_ce_forward_atomic_loss|lm_head_l2wrap_ce_forward_finalize).*' --launch-count 16 --section SpeedOfLight --section Occupancy --section MemoryWorkloadAnalysis --section SchedulerStats --section WarpStateStats --csv --log-file target/rwkv-test/ncu-lm-head-atomic-loss.csv target/release/rwkv-test compare-rwkv-nn --color never --repeat 1 --warmup 1`.
+- Profiler result: autotune selected `lm_head_l2wrap_ce_forward_atomic_loss_kernel_f__i_i32`, block `(512,1,1)`, grid `(8192,1,1)`. Sample durations were about `728-731us`; DRAM throughput about `87.6%`; achieved occupancy about `98.3-98.5%`; eligible warps per scheduler about `1.18-1.21`; no local or shared spilling.
+- Interpretation: the atomic candidate did remove the finalize kernel from the selected path, but the row kernel remains dominated by the full-vocab two-pass scan. The single f32 atomic add per row is not the limiting cost, and it does not move total speedup enough.
+- Decision: reject this implementation for the kept tree. It is correctness-passing locally but still slower than baseline and introduces nondeterministic f32 accumulation under a key currently marked `deterministic=true`.
+- Keep/revert state: code changes reverted in this branch; `cargo +nightly fmt --all` and `rtk cargo check -p rwkv-nn --features cuda` passed after the revert. `rg -n "atomic_loss|forward_atomic_loss|fetch_add\\(row_loss" crates/rwkv-nn/src/kernels/train/lm_head_l2wrap_ce .agents/notes/kernel-tuning/2026-05-16-lm-head-forward-atomic-loss.md` now only finds this note, not live kernel code.

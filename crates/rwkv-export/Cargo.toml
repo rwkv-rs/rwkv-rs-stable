@@ -1,0 +1,50 @@
+[package]
+name = "rwkv-export"
+authors = ["caizus <18930215187@163.com>"]
+categories = ["science", "algorithms", "command-line-utilities"]
+keywords = ["rwkv", "llm", "export", "safetensors", "burn"]
+description = "RWKV model weight mapping and web-rwkv safetensors export"
+
+rust-version = "1.95"
+
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+version.workspace = true
+
+[lib]
+bench = false
+
+[[bin]]
+name = "rwkv-export"
+path = "src/main.rs"
+bench = false
+
+[dependencies]
+# === CLI & GUI ===
+clap = { workspace = true, features = ["color", "derive", "error-context", "help", "std", "suggestions", "usage"] }
+
+# === Exception Handling ===
+anyhow = { workspace = true, features = ["std"] }
+thiserror = { workspace = true }
+
+# === Deep Learning Core ===
+burn = { workspace = true, default-features = false, features = ["std"] }
+burn-store = { workspace = true, default-features = false, features = ["std", "pytorch", "safetensors"] }
+
+# === Data Structures ===
+safetensors = { workspace = true, features = ["std"] }
+half = { workspace = true }
+
+# === Local Dependencies ===
+rwkv-nn = { path = "../rwkv-nn", default-features = false }
+
+[dev-dependencies]
+# === Deep Learning Core ===
+burn = { workspace = true, default-features = false, features = ["std", "cpu"] }
+
+# === File ===
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

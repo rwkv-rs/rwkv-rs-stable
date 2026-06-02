@@ -1,0 +1,89 @@
+# Residual Matmul Epilogue GB10
+
+- Date: 2026-05-16.
+- Branch/worktree: `kernel-tuning-residual-matmul-epilogue-gb10-20260516` in the existing dirty local checkout.
+- Dirty-tree constraint: this checkout carries broad unrelated workspace edits plus retained/reverted kernel tuning changes. This attempt owns only this design/feasibility note unless a later entry explicitly opens an implementation branch.
+- User constraint: tune/debug first on remote `10.100.1.253`; do not use local GPU timing.
+- Prior-note and memory search command:
+  - `rtk rg -n "matmul.*residual|residual.*matmul|epilogue|fused matmul|FusedMatmul|kernel_binop_c_bf16_n_8|projection.*residual|matmul.*add" /root/.codex/memories/MEMORY.md .agents/notes/kernel-tuning .agents/skills/kernel-tuning/SKILL.md`.
+- Matched prior evidence:
+  - `2026-05-16-binop-attribution-gb10.md` shows current `kernel_binop_c_bf16_n_8` is `72/72` residual-add launches immediately after a Cubek BF16 matmul and before the next LayerNorm.
+  - `2026-05-16-wire-custom-residual-add.md` already tried replacing those model and trace-writer residual adds with the custom residual kernel; activation passed but timing regressed, so plain residual-add retry is closed.
+  - `2026-05-16-lm-head-projection-loss-design.md` and `2026-05-16-channel-mixer-matmul-fusion-analysis.md` both found no small public TMA matmul epilogue hook in current Burn/CubeCL/Cubek paths. This branch checks whether residual add has a simpler supported fused-matmul route before closing the boundary.
+- Machine/GPU: remote target remains `10.100.1.253`, `NVIDIA GB10`, compute capability `12.1`. This branch is source/API inspection first and runs no GPU workload unless a concrete implementation candidate is found.
+- Shape/dtype: CUDA BF16 `rwkv_lm`, `B=16,T=512,D=768`, rows `8192`. The two source sites are TimeMixer output projection plus residual, and ChannelMixer value projection plus residual.
+- Hypothesis: if Burn/CubeCL can preserve the current Cubek/TMA matmul while adding a simple output epilogue `out = matmul(lhs, rhs) + residual`, the standalone `kernel_binop_c_bf16_n_8` launches could be removed without repeating the rejected custom residual kernel. If the only available fused path drops TMA or requires Cubek internals, this is not a safe small kernel-tuning patch.
+- Candidate parameters: none yet. Source-analysis candidates are ordinary `Linear`/`float_matmul`, Burn fused matmul, Cubek global writer/epilogue extension points, and whether either call site can express a supported fused add without changing training gradients.
+- Expected keep/revert boundary: keep this note if it proves the boundary feasible or records why it is too broad. Do not implement a naive project-local matmul, and do not rerun standalone residual-add.
+- Next command: inspect the source call sites and the exact Burn/CubeCL/Cubek fused matmul or writer APIs for residual-add support.
+
+## Source/API Inspection
+
+- Source call sites:
+  - `CausalCell::forward` computes `embedded_context + time_mixer_output.embedded_context` after `TimeMixer::forward`, then `embedded_context + channel_mixer_output.embedded_context` after `ChannelMixer::forward`.
+  - `GatedReadout::forward` ends with `self.projection_output.forward(out_gated)`.
+  - `ChannelMixer::forward` emits the value projection through `self.value.forward(activated_key)` when token-shift state is present, or through the project custom channel mixer path otherwise.
+- Burn/CubeCL/Cubek inspection:
+  - Burn default `linear` lowers to `B::float_matmul(x, weight)` plus optional bias add. These RWKV projections are bias-free, so the residual add is the next separate tensor operation.
+  - Ordinary CubeCL matmul launches `cubek::matmul::launch::launch_ref(...)` with only a full output tensor binding.
+  - Cubek has internal `GlobalWriter` and `WriteEventListener` traits, but no project-facing residual epilogue API was found.
+  - Burn/CubeCL fused matmul exists and can fuse elementwise operations after a matmul, but it is only active when the backend is the fusion decorator.
+- Feature-boundary finding:
+  - `rwkv-nn` defines `fusion = ["burn/fusion", "dep:burn-fusion", "burn-cubecl/fusion"]`.
+  - `rwkv-test` currently defines `cuda = ["burn/cuda", "burn/autotune", "rwkv-nn/cuda", "rwkv-nn/autotune"]`, so the standard `compare-rwkv-nn --features cuda` binary does not enable the `rwkv-nn/fusion` feature.
+  - Burn `Cuda` is a type alias: without `burn-cuda/fusion` it is `CubeBackend<CudaRuntime, ...>`; with fusion it is `burn_fusion::Fusion<CubeBackend<CudaRuntime, ...>>`.
+- Candidate change: add `rwkv-nn/fusion` to `rwkv-test`'s `cuda` feature so the standard remote compare binary actually uses Burn/CubeCL fusion. This is a runtime/backend-dispatch candidate, not a standalone residual kernel. It may remove `kernel_binop_c_bf16_n_8` if fused matmul accepts the residual add, but it may also lose the current TMA matmul winner or fuse unrelated elementwise work. The decision must use remote activation plus standard timing and an `nsys` kernel-window check.
+- Next edit: update only `crates/rwkv-test/Cargo.toml` to propagate `rwkv-nn/fusion` under `cuda`, then run remote `cargo check -p rwkv-test --features cuda` and remote standard compare on `10.100.1.253`.
+
+## Feature Propagation Candidate
+
+- Code change: added `rwkv-nn/fusion` to `crates/rwkv-test/Cargo.toml` under the `cuda` feature.
+- Local command: compile-only `cargo check -p rwkv-test --features cuda`; this must not be interpreted as local GPU timing.
+- Local compile result: failed before any GPU execution. `TraceWriter::<TraceBackend>::new` is unavailable because `TraceBackend` becomes `burn_fusion::Fusion<CubeBackend<CudaRuntime, bf16, i32, u8>>`, and `LayerNormBackend` is not implemented for `Fusion<CubeBackend<...>>`.
+- Next command: inspect existing custom-kernel `fusion_impl` bridge patterns and `layer_norm` module ownership. If `LayerNormBackend` only lacks the same bridge, add the smallest wrapper implementation; if the wrapper would require a new trace operation contract, revert the feature candidate.
+- Inspection result: `key_prepare` and `gated_readout_combine` already implement their custom backend traits for `burn_fusion::Fusion<B>` by registering a `CustomOpIr` and executing the underlying backend trait inside `Operation::execute`. `layer_norm` has no equivalent bridge.
+- Next edit: add the same minimal `#[cfg(feature = "fusion")]` bridge to `layer_norm/mod.rs`; it should not change the Cube kernel body or the LayerNorm numerical algorithm.
+- Code change: added a `#[cfg(feature = "fusion")]` `LayerNormBackend for Fusion<B>` bridge in `crates/rwkv-nn/src/kernels/train/layer_norm/mod.rs`. The bridge registers `fused_layer_norm` as a custom fusion operation and delegates execution to the underlying backend's `B::fused_layer_norm`.
+- Next command: rustfmt only `crates/rwkv-nn/src/kernels/train/layer_norm/mod.rs`, then rerun compile-only `cargo check -p rwkv-test --features cuda`.
+- Local format/check result: rustfmt passed and compile-only `cargo check -p rwkv-test --features cuda` passed. This did not run local GPU timing.
+- Next command: run `git diff --check` for the touched files, sync `crates/rwkv-test/Cargo.toml`, `crates/rwkv-nn/src/kernels/train/layer_norm/mod.rs`, and this note to `10.100.1.253`, then run remote `cargo check -p rwkv-test --features cuda`.
+- `git diff --check` passed for the touched files.
+- Remote sync result: synced `crates/rwkv-test/Cargo.toml`, `crates/rwkv-nn/src/kernels/train/layer_norm/mod.rs`, and this note to `/home/caizus/Projects/Packages/rwkv-rs-stable` on `10.100.1.253`.
+- Remote command: `cargo check -p rwkv-test --features cuda` on `10.100.1.253`.
+- Remote compile result: `cargo check -p rwkv-test --features cuda` passed on `10.100.1.253` in `13.19s`.
+- Next command: remote standard compare on `10.100.1.253`, `cargo run --release -p rwkv-test --features cuda -- compare-rwkv-nn --color never --baseline /home/caizus/Projects/Packages/rwkv-rs-test/test_gen/rwkv_lm/bf16/case_000000 --repeat 3 --warmup 1`, captured to `target/rwkv-test/remote-residual-matmul-fusion-compare.log`.
+- Invalid wrapper result: the remote zsh wrapper failed after the cargo command because it assigned to zsh's read-only `status` variable. Do not draw a pass/fail conclusion from the wrapper exit code. Next command reads the captured log; if it is incomplete, rerun with a non-reserved `rc` variable.
+- Log inspection result: `target/rwkv-test/remote-residual-matmul-fusion-compare.log` is complete. Activation passed (`54/54`). Timing exited nonzero with 3 short-row failures: `cell_0000/embedded_context_after_time_mixer`, `cell_0011/embedded_context_after_time_mixer`, and `embedding`. Module totals show residual rows substantially faster (`embedded_context_after_time_mixer` `2.375ms` vs `5.283ms`, `2.22x`; `embedded_context_after_channel_mixer` `2.222ms` vs `6.051ms`, `2.72x`) and total actual time around `79.595ms`; extract exact summary next.
+- Next command: extract exact activation/timing summary lines from the remote log, then run remote `nsys` if total timing is genuinely better to verify whether `kernel_binop_c_bf16_n_8` disappeared or just moved.
+- Exact-summary limitation: the program's log line itself contains ellipses, so exact `baseline_total_ms`/`speedup` cannot be recovered from that line. The timing files confirm the actual tree has 77 time files and total raw elapsed `94.946ms` including ignored/noncanonical rows; the compare summary reports canonical actual total `79.595ms`. Baseline raw total is `175.887ms`.
+- Next command: remote `nsys profile --trace=cuda,nvtx,osrt --sample=none --force-overwrite=true --output target/rwkv-test/nsys-residual-matmul-fusion-gb10 target/release/rwkv-test compare-rwkv-nn --color never --baseline /home/caizus/Projects/Packages/rwkv-rs-test/test_gen/rwkv_lm/bf16/case_000000 --repeat 1 --warmup 1`, then query kernel names and neighbors from the sqlite export.
+- Remote nsys result: profiler run exited nonzero because single-run compare under profiler marked all timing rows as failed, but it generated `target/rwkv-test/nsys-residual-matmul-fusion-gb10.nsys-rep`. This profile is valid for launch attribution, not timing acceptance.
+- Next command: export the report to sqlite and query kernel totals plus whether `kernel_binop_c_bf16_n_8` remains.
+- Remote nsys sqlite result: `kernel_binop_c_bf16_n_8` remains present with `72` launches, `8.736ms` total, `121.334us` average. The prior non-fusion profile had `72` launches and about `8.579ms` total, so Burn/CubeCL fusion did not remove or improve the residual add kernels.
+- Top kernels in the fusion profile include `matmul_entry_lhs_bf16_lhs_size_1_rhs_bf16_rhs_size_1_acc_bf16_acc_size_8` `327` launches / `123.644ms`, WKV7 output `36` / `22.169ms`, Mix6 `36` / `14.572ms`, channel mixer relu-square `36` / `14.379ms`, and `kernel_binop_c_bf16_n_8` `72` / `8.736ms`.
+- Interpretation: this feature candidate is not a residual-matmul epilogue. The apparent `.time.json` module speedups may be a timing-boundary artifact under `Fusion`, because the residual kernel launch count/time did not disappear. Next command: inspect the timing helper for explicit backend synchronization around each measured closure.
+- Timing-helper inspection result: `TraceWriter` calls `B::sync(self.device)` before starting and after executing each timed closure, including time mixer, channel mixer, LayerNorm, residual add, projection, and loss. The `.time.json` rows are therefore synchronized at the helper boundary. The remaining concern is that enabling the fusion backend is a broad runtime change, not the specific residual epilogue targeted by this branch.
+- Next command: query the prior `nsys-current-after-gb10-results.sqlite` and the new fusion sqlite side by side for total kernel time and selected top kernels, without running another GPU workload.
+- Prior-vs-fusion nsys result:
+  - Current profile: `1320` kernel launches, `249.735ms` total kernel time.
+  - Fusion profile: `1309` kernel launches, `253.121ms` total kernel time.
+  - `kernel_binop_c_bf16_n_8`: current `72 / 8.579ms / 119.160us`; fusion `72 / 8.736ms / 121.334us`.
+  - Main BF16 matmul `lhs_size_1/rhs_size_1`: current `327 / 120.169ms`; fusion `327 / 123.644ms`.
+  - LayerNorm: current `78 / 6.067ms`; fusion `78 / 6.754ms`.
+  - `lm_head_l2wrap_ce_forward_row`: current `3 / 13.617ms`; fusion `3 / 12.673ms`.
+- Decision: reject the `rwkv-test cuda -> rwkv-nn/fusion` candidate for this residual-matmul-epilogue branch. It does not remove the residual add kernel and slightly worsens total CUDA kernel time despite improving one lm-head row kernel. Revert the manifest feature propagation and the LayerNorm fusion bridge; keep this note and sqlite as negative evidence.
+- Next edit: revert only `crates/rwkv-test/Cargo.toml` and `crates/rwkv-nn/src/kernels/train/layer_norm/mod.rs` changes from this branch.
+- Revert edit: removed `rwkv-nn/fusion` from `rwkv-test`'s `cuda` feature and removed the temporary `LayerNormBackend for Fusion<B>` bridge from `layer_norm/mod.rs`.
+- Next command: rustfmt `layer_norm/mod.rs`, then local compile-only `cargo check -p rwkv-test --features cuda` to confirm the reverted feature boundary builds without using local GPU timing.
+- Local post-revert check result: rustfmt passed and compile-only `cargo check -p rwkv-test --features cuda` passed. No local GPU timing was run.
+- Next command: sync the reverted `crates/rwkv-test/Cargo.toml`, reverted `crates/rwkv-nn/src/kernels/train/layer_norm/mod.rs`, and this note to `10.100.1.253`, then run remote `cargo check -p rwkv-test --features cuda`.
+- Remote post-revert result: synced the reverted files and this note to `10.100.1.253`; remote `cargo check -p rwkv-test --features cuda` passed in `1.49s`.
+- Keep/revert state: rejected candidate reverted from live source. The only intended persistent artifact from this branch is this note plus the remote profile artifacts:
+  - `target/rwkv-test/remote-residual-matmul-fusion-compare.log`
+  - `target/rwkv-test/nsys-residual-matmul-fusion-gb10.nsys-rep`
+  - `target/rwkv-test/nsys-residual-matmul-fusion-gb10.sqlite`
+- Dirty-tree clarification: `git diff` still shows `crates/rwkv-test/Cargo.toml` has pre-existing cuda/autotune feature changes relative to HEAD. This branch reverted only the temporary `rwkv-nn/fusion` addition and did not revert those unrelated existing changes.
+- Next edit: update `kernel-tuning` skill with this negative residual-fusion result.
+- Skill update: added a GB10 negative-result guard saying broad `rwkv-test cuda -> rwkv-nn/fusion` does not remove `kernel_binop_c_bf16_n_8` and worsens total CUDA kernel time, so it must not be retried as a residual-matmul epilogue.
+- Next command: run `git diff --check` for the note and skill, then sync both to `10.100.1.253`.
+- Final sync/check result: `git diff --check` passed for the note and skill. Synced both files to `10.100.1.253`.

@@ -1,0 +1,36 @@
+# Channel Mixer Local Regenerated Baseline
+
+- Date: 2026-05-16.
+- Branch/worktree: `kernel-tuning-channel-mixer-local-regenerated-baseline-20260516` in the existing dirty workspace.
+- Dirty-tree constraint: the checkout already contains broad unrelated workspace changes and prior tuning notes. This attempt is scoped to channel-mixer evidence under the fresh local regenerated baseline and should not edit kernels unless the next note entry records a specific non-duplicate implementation hypothesis.
+- Prior-note/source search command:
+  - `rg -n "channel_mixer|ChannelMixer|LocalTuner|Burn reference|line_size|fused_channel_mixer|0\\.81x|local regenerated" .agents/notes/kernel-tuning /root/.codex/memories/MEMORY.md -S`
+- Matched prior evidence:
+  - `2026-05-16-local-regenerated-baseline.md` found local regenerated baseline total speedup `2.44x`, but `cells/*/channel_mixer` remained slower at `9.907ms` actual vs `7.976ms` baseline, `0.81x`.
+  - `2026-05-16-local-short-kernel-provenance.md` already inspected local channel-mixer autotune cache: mix selected `line_size_2`, ReLU-square selected `line_size_8`.
+  - `2026-05-16-channel-mixer-ncu.md` found custom mix and ReLU-square kernels memory-heavy but not the full module bottleneck; prior ncu pointed at the matmul surface.
+  - `2026-05-16-channel-mixer-cube-matmul.md` forced Cube matmul and regressed badly (`cells/*/channel_mixer` `0.38x`), so do not repeat forced Cube matmul.
+  - Memory and skill guardrails record that Burn-reference/forced-fusion and LocalTuner-bypass attempts regressed or did not improve the real compare loop.
+- Changed boundary: this is a local regenerated Python CUDA baseline, not the older checked-in fixture. It can reclassify whether channel mixer is still a meaningful local gap, but it does not justify repeating already rejected implementation changes.
+- Machine/GPU: local RTX 5090, compute capability 12.0.
+- Shape/dtype: CUDA BF16 `B=16,T=512,D=768`, channel mixer rows `8192`, hidden expansion `3072`.
+- Hypothesis: the local channel-mixer gap may be dominated by Cubek matmul dispatch or module timing composition, rather than the custom mix/ReLU-square kernels or host tuner lookup. Confirm current autotune/cache and timing decomposition before proposing code.
+- Expected keep/revert boundary: keep evidence only. If this branch later edits code, the edit must be a new non-duplicate channel-mixer hypothesis with trace-backed correctness and fresh timing.
+- Next command: inspect the current channel-mixer autotune cache entries and generated actual/baseline channel-mixer samples from the fresh local run.
+- 14:00 CST cache/sample inspection:
+  - Current `target/autotune/0.10.0/...channel-mixer-mix-forward.json.log` has the hardware-rich key for `runtime=cuda`, `dtype=BF16`, `rows=8192`, `innermost_dim=768`, `max_line_size=8`, `is_in_place=false`, `deterministic=true`; it selected `line_size_2`.
+  - Current `target/autotune/0.10.0/...channel-mixer-relu-square-forward.json.log` has the hardware-rich key for `runtime=cuda`, `dtype=BF16`, `rows=8192`, `innermost_dim=3072`, `max_line_size=8`, `is_in_place=true`, `deterministic=true`; it selected `line_size_8`.
+  - Fresh actual channel-mixer samples vary from about `0.697ms` to `1.004ms` per cell; baseline varies from about `0.563ms` to `0.797ms` per cell. Group total remains `9.907ms` actual vs `7.976ms` baseline.
+  - The elementwise autotune decisions are plausible and align with prior evidence that mix/ReLU-square are not the dominant module bottleneck.
+- Interpretation: the non-duplicate next investigation is Cubek matmul dispatch/provenance inside channel mixer, not Burn-reference, forced Cube matmul, or LocalTuner bypass.
+- Next command: inspect local Cubek matmul autotune/cache entries and source path for the channel mixer matmul shapes.
+- 14:01 CST matmul cache/source inspection:
+  - Local matmul tuner files are `target/autotune/0.10.0/device-0-0-cuda/burn_cubecl-kernel-matmul-tune-base.json.log` and `burn_cubecl_fusion-optim-matmul-tune.json.log`.
+  - `crates/rwkv-nn/src/kernels/train/channel_mixer/forward.rs` calls `CubeBackend::float_matmul` twice:
+    - key projection after reshape `[B*T, D] x key_weight`.
+    - value projection after ReLU-square `[B*T, 4D] x value_weight`.
+  - The matmul cache does not record these as plain `8192x768x3072` strings; CubeCL stores internal matmul definitions with `m`, `n`, `k`, stride factors, layouts, and analysis class. Therefore source/cache inspection alone is not enough to map the exact channel-mixer matmul kernels without profiler kernel names or extra instrumentation.
+  - The cache contains both base matmul and fusion matmul entries. Example large unembed key `m=512,n=65536,k=1024` chooses `matmul_specialized_tma_mma`; medium keys choose variants such as `matmul_ordered_double_mma_partition_k2...`, `matmul_double_cyclic_mma_specialized`, or fused `fused_simple_*`.
+- Decision:
+  - No kernel edit from this branch. The actionable remaining channel-mixer question is profiler attribution of the two `float_matmul` launches versus custom mix/ReLU-square under the local regenerated baseline.
+  - Because local GPU use is constrained by the user and prior ncu already exists for the older baseline, do not start a fresh local ncu/nsys run in this branch.

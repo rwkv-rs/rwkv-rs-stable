@@ -1,0 +1,65 @@
+# LayerNorm Ordered-256 Accuracy Root Cause
+
+- Date: 2026-05-16.
+- Branch/worktree: `kernel-tuning-layernorm-ordered256-accuracy-rootcause-20260516` in the existing dirty workspace.
+- Dirty-tree constraint: this checkout carries broad unrelated uncommitted workspace changes plus the kept TimeMixer gate wiring. This attempt is diagnostic first; do not keep any temporary kernel/debug code unless the note records why it is part of the final design.
+- Prior-note search command:
+  - `rg -n "layer_norm|LayerNorm|ordered256|ordered-256|block_256_d768_ordered|value_from_first_cell|lm_head/embedded_context|debug|diagnostic|accuracy" .agents/notes/kernel-tuning crates/rwkv-nn/src crates/rwkv-test/src -S`
+- Matched prior evidence:
+  - `2026-05-16-layernorm-d768-ordered256.md` says an earlier ordered-256 implementation passed local activation and improved LayerNorm timing, but was later reverted because remote-first timing did not improve.
+  - `2026-05-16-layernorm-ordered256-post-gates.md` says the post-gates rewrite failed activation: `cells/cell_0000/time_mixer/value_from_first_cell.safetensors` max_abs `1.171875e-1`, and `lm_head/embedded_context.safetensors` max_abs `1.562500e-1`.
+  - Ordinary local BF16 `D=768` block `256`, `512`, and `768` candidates have the same downstream drift family, so a candidate must prove its numerical boundary before being allowed into autotune.
+- Machine/GPU: remote `10.100.1.253` CUDA machine for correctness diagnosis and any later timing. The local GPU is reserved for other work, so local GPU runs are not valid evidence for this attempt.
+- Shape/dtype: CUDA BF16 `rwkv_lm`, `B=16,T=512,D=768`, rows `8192`, LayerNorm forward.
+- Question: is ordered-256 failing because the reduction math/order itself changes the LayerNorm result enough, because the CubeCL kernel implementation is wrong, or because downstream layers amplify a small but expected LayerNorm difference?
+- Diagnostic boundary:
+  1. First do a CPU-side mathematical simulation of the current safe 1024 reduction order and the intended ordered-256 reduction order on real trace input. This does not edit kernels.
+  2. If CPU math matches closely, inspect or instrument the Cube kernel implementation as a likely bug/lowering issue.
+  3. If CPU math itself diverges materially, treat ordered-256 as a bad deterministic algorithm and do not retry the kernel.
+- Expected keep/revert boundary: keep this note and any generated diagnostic outputs as evidence. Do not change live LayerNorm dispatch until the first mismatching quantity is identified.
+- Next command: inspect available fixture tensors and Python safetensors support, then run a CPU reduction-order diagnostic against `embedding/embedded_context.safetensors`.
+- Fixture/tooling inspection: the trace fixture has `embedding/embedded_context.safetensors` and `layer_norm0/embedded_context.safetensors`; Python lacks `safetensors` and `torch`, but `rwkv-test` already exposes `read_safetensor_values`.
+- Boundary update from user: debug first on `10.100.1.253`; do not use local GPU measurements.
+- Next command: connect to `10.100.1.253`, identify repo path/branch/fixture state, then add/run a temporary `rwkv-test` diagnostic there that reads the real BF16 input and simulates the `1024`, ordinary `256`, and intended ordered-256 reduction orders with f32 operations before any kernel edit.
+- Remote preflight attempt:
+  - Command: `ssh 10.100.1.253 'hostname'`, `ssh 10.100.1.253 'find ... rwkv-rs-stable ...'`, and `ssh 10.100.1.253 'nvidia-smi ...'`.
+  - Result: invalid/no data. Direct SSH selected `root@10.100.1.253` and failed authentication with `Permission denied (publickey,password)`.
+  - Decision: no remote GPU command has run yet. Find the correct remote login or workspace access path before continuing.
+- Corrected remote access from prior notes/memory: use `ssh -i ~/.ssh/id_ed25519_dgx_spark_windows -o BatchMode=yes -o ConnectTimeout=10 caizus@10.100.1.253`.
+- Next command: corrected remote preflight to confirm host/GPU, `~/Projects/Packages/rwkv-rs-stable`, and `~/Projects/Packages/rwkv-rs-test/test_gen/rwkv_lm/bf16/case_000000`.
+- Corrected remote preflight result: host `spark-35ac`; GPU `NVIDIA GB10`, compute capability `12.1`, driver `580.95.05`; `~/Projects/Packages/rwkv-rs-stable` exists; regenerated baseline `~/Projects/Packages/rwkv-rs-test/test_gen/rwkv_lm/bf16/case_000000` exists; Rust/Cargo are `1.95.0`.
+- Next edit: add temporary `crates/rwkv-test/examples/layer_norm_reduction_order.rs` to compare CPU-simulated LayerNorm reduction orders on the real fixture input and expected output.
+- Code change: added temporary `crates/rwkv-test/examples/layer_norm_reduction_order.rs`. It reads the real trace input/output plus `layer_norm_for_first_cell.{gamma,beta}` from the `.st` weights, simulates `block=1024`, ordinary `block=256`, and ordered-256 reductions with f32 warp-xor order, and reports deltas for `sum`, `squares`, `mean`, `inv_std`, normalized values, and affine BF16 output.
+- Next command: format this example locally, then sync only the example and this note to `caizus@10.100.1.253:~/Projects/Packages/rwkv-rs-stable`.
+- Formatting result: `rustup run nightly rustfmt crates/rwkv-test/examples/layer_norm_reduction_order.rs` passed.
+- Next command: scoped `rsync -avR` of the example and this note to the remote measurement copy.
+- Remote sync result: scoped `rsync -avR` copied only `crates/rwkv-test/examples/layer_norm_reduction_order.rs` and this note to `caizus@10.100.1.253:~/Projects/Packages/rwkv-rs-stable`.
+- Next command: remote compile gate for the diagnostic example with `cargo check -p rwkv-test --example layer_norm_reduction_order`.
+- Remote compile result: `cargo check -p rwkv-test --example layer_norm_reduction_order` passed on `10.100.1.253`.
+- Next command: run the remote CPU diagnostic example against `~/Projects/Packages/rwkv-rs-test/test_gen/rwkv_lm/bf16/case_000000` and `weights/rwkv-init-0.1b-ctx512-test.st`.
+- Invalid remote diagnostic run: release build succeeded, but the example failed before producing numeric data because `weights/rwkv-init-0.1b-ctx512-test.st` does not contain `layer_norm_for_first_cell.gamma`. Inspect the actual `.st` keys and update the temporary example to read the exported key names.
+- Key mapping check: repo mapping uses exported `.st` keys `blocks.0.ln0.weight` and `blocks.0.ln0.bias` for the first LayerNorm.
+- Next edit: update the temporary example to try both Burn-internal names and exported `.st` names for gamma/beta.
+- Code change: updated `layer_norm_reduction_order.rs` to read gamma/beta from either `layer_norm_for_first_cell.{gamma,beta}` or exported `blocks.0.ln0.{weight,bias}` keys.
+- Next command: format, sync the updated example and note, then rerun the remote diagnostic.
+- Formatting result: `rustup run nightly rustfmt crates/rwkv-test/examples/layer_norm_reduction_order.rs` passed after the key fallback edit.
+- Next command: scoped `rsync -avR` of the updated example and note, then rerun the remote diagnostic.
+- Remote sync result: updated example and note synced to `10.100.1.253`.
+- Next command: rerun the remote CPU reduction-order diagnostic.
+- Remote diagnostic result for `layer_norm0`: ordered-256 is exactly identical to the safe `1024` reduction in the CPU simulation for every reported stage (`sum`, `squares`, `mean`, `inv_std`, normalized values, and BF16 affine output all `max_abs=0`). Ordinary `256` differs before BF16 quantization only at tiny f32 levels (`sum max_abs=2.328306437e-10`, `mean max_abs=4.547473509e-13`, normalized `max_abs=3.725290298e-9`) and still produces identical BF16 affine output versus `1024`. The simulated safe output differs from the baseline by `max_abs=1.220703125e-4`, which is likely an affine/cast-order modeling detail, not a reduction-order difference because all three reduction paths have the same output-vs-baseline stats.
+- Interpretation: the ordered-256 mathematical reduction order itself is not the cause for `layer_norm0`. If the post-gates ordered-256 source failed activation, the likely causes are either the temporary Cube kernel implementation/lowering, another LayerNorm invocation's input distribution, stale autotune/cache boundary, or downstream amplification from a non-layer_norm source. Next localizing step is to inspect cell-level LayerNorm trace files and run the same diagnostic on the first failing cell boundary if the fixture has the needed input/output tensors.
+- Next command: inspect the remote regenerated baseline for `cells/cell_0000` LayerNorm input/output tensor paths.
+- Cell fixture inspection result: the regenerated baseline does not save pre-LayerNorm outputs; it saves `cells/cell_0000/time_mixer/embedded_context.safetensors`, `cells/cell_0000/time_mixer/value_from_first_cell.safetensors`, `cells/cell_0000/embedded_context_after_time_mixer.safetensors`, `cells/cell_0000/channel_mixer/embedded_context.safetensors`, and `cells/cell_0000/embedded_context_after_channel_mixer.safetensors`.
+- Next edit: extend the temporary diagnostic to run reduction-order comparisons for `cell_0000` pre-time-mix LayerNorm (`blocks.0.ln1`, input `layer_norm0/embedded_context`) and pre-channel-mix LayerNorm (`blocks.0.ln2`, input `cells/cell_0000/embedded_context_after_time_mixer`) without needing saved pre-LayerNorm output tensors.
+- Code change: refactored the diagnostic into `run_case` and added cases for `cell0_pre_time_mix_ln1` and `cell0_pre_channel_mix_ln2`; these report order deltas without expected output tensors.
+- Next command: format the updated example, sync it and this note, then rerun the remote diagnostic.
+- Formatting result: `rustup run nightly rustfmt crates/rwkv-test/examples/layer_norm_reduction_order.rs` passed after adding the cell-level cases.
+- Next command: scoped sync and remote diagnostic rerun.
+- Remote sync result: updated multi-case diagnostic and note synced to `10.100.1.253`.
+- Next command: rerun `cargo run --release -p rwkv-test --example layer_norm_reduction_order`.
+- Remote multi-case diagnostic result:
+  - `layer_norm0`: ordered-256 vs `1024` stayed exactly `0` at every stage and output. Ordinary `256` had tiny f32-stage deltas but BF16 output still matched `1024`.
+  - `cell0_pre_time_mix_ln1`: ordered-256 vs `1024` stayed exactly `0` at every stage and output. Ordinary `256` differed at `sum max_abs=1.490116119e-8`, `squares max_abs=5.960464478e-8`, `inv_std max_abs=1.144409180e-5`, normalized `max_abs=3.576278687e-7`, and BF16 affine output `max_abs=7.8125e-3`.
+  - `cell0_pre_channel_mix_ln2`: same order-delta profile as `cell0_pre_time_mix_ln1`; ordered-256 remained exact versus `1024`, ordinary `256` produced BF16 output `max_abs=7.8125e-3`.
+- Interpretation update: the intended ordered-256 math is not the cause. It exactly reproduces the `1024` reduction order for `layer_norm0`, `cell0` pre-time-mix LayerNorm, and `cell0` pre-channel-mix LayerNorm. Ordinary `256` can produce a real BF16 output delta at the cell pre-LayerNorm boundary, so the post-gates failure is consistent with the temporary ordered kernel accidentally executing an ordinary-256-like accumulation/order, a Cube implementation/lowering bug, or a stale autotune/source boundary. Based on this evidence, the rejected post-gates ordered-256 failure is a kernel implementation/debug hygiene problem, not an inherent mathematical iteration problem.
+- Decision: do not re-admit ordered-256 as a live candidate until the actual Cube kernel implementation is reconstructed with a device-side guard that proves ordered output equals the `1024` path on trace-backed cell pre-LayerNorm inputs.

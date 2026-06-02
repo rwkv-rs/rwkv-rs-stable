@@ -1,0 +1,22 @@
+# Backward Autotune Hardware Key
+
+- Date: 2026-05-16
+- Branch/worktree: `kernel-tuning-backward-autotune-hw-key-20260516` in the existing dirty workspace.
+- Prior-note search command: `rg -n "backward|AutotuneKey|hardware key|num_tensor_cores|max_cube_dim|max_units_per_cube|line_size_reduce_tile|residual|残差" .agents/notes/kernel-tuning .agents/skills/kernel-tuning/SKILL.md /root/.codex/memories/MEMORY.md`.
+- Matched prior evidence:
+  - `2026-05-16-forward-elementwise-autotune-key.md` already expanded forward elementwise keys for `channel_mixer`, `learning_rate_gate`, and `value_residual_gate`.
+  - `2026-05-16-lm-head-forward-hardware-key.md` expanded the `lm_head_l2wrap_ce` forward key with CubeCL hardware fields.
+  - `2026-05-16-lm-head-backward-autotune.md` changed backward candidates but explicitly did not make a forward timing claim.
+  - `2026-05-16-skill-guardrails.md` records the residual-add negative result; this attempt does not touch `residual_add`.
+- Machine/GPU: local CUDA machine, prior ncu reports CC 12.0.
+- Scope: backward autotune keys for train kernels whose tunable candidates are selected from line-size, block-size, BT-tile, or pow2-index choices.
+- Hypothesis: backward reduction candidates should be cached per runtime, shape, dtype, hardware capability, vector width, in-place/alias state, and deterministic boundary. This is a dispatch-key correctness change, not a claimed speedup by itself.
+- Candidate parameters: no candidate set change; only autotune key fields and display strings should change.
+- Planned commands: `rtk cargo check -p rwkv-nn --features cuda`; then run trace-backed compare if compile succeeds.
+- Code change: expanded backward autotune keys for `lm_head_l2wrap_ce`, `channel_mixer`, `learning_rate_gate`, `value_residual_gate`, and `mix6` with runtime, hardware capability fields, rows, `d_model`, vector-width limits, in-place/alias state, and deterministic flag. Reduction tunable validity now also rejects block sizes above `max_units_per_cube`.
+- Compile result: `rtk cargo check -p rwkv-nn --features cuda` passed.
+- Compare command: `rtk cargo run --release -p rwkv-test --features cuda -- compare-rwkv-nn --color never --repeat 3 --warmup 1`.
+- Correctness result: activation comparison passed (`activation_summary compared=54 passed=54 failed=0`).
+- Timing result: still below acceptance (`timing_summary compared=76 passed=8 failed=68 ... actual_total_ms=45.298 baseline_total_ms=35.957 speedup=0.79x`). The command returned nonzero because timing failed.
+- Interpretation: this branch is a key-design correction and the forward steady-state compare is not a backward-performance boundary. The slow forward groups remain `channel_mixer`, pre-layer-norm stages, `lm_head`, and `loss/l2wrap_cross_entropy`.
+- Decision: keep the key expansion as correctness-safe hardware/shape dispatch work, but do not claim a speedup from it. Next tuning branch should target a forward slow group with a fresh preflight and ncu-backed hypothesis.

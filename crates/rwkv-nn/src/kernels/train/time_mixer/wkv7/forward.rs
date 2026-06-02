@@ -1,20 +1,20 @@
-use burn::tensor::{ops::FloatTensor, DType, Shape};
+use burn::tensor::{DType, Shape, ops::FloatTensor};
 use burn_cubecl::{
-    cubecl::{
-        prelude::*,
-        tune::{anchor, local_tuner, AutotuneKey, LocalTuner, Tunable, TunableSet, TuneGroup},
-        CubeCount,
-        CubeDim,
-    },
-    element::BoolElement,
-    ops::numeric::empty_device,
-    tensor::CubeTensor,
     CubeBackend,
     CubeElement,
     CubeRuntime,
     CubeTuneId,
     FloatElement,
     IntElement,
+    cubecl::{
+        CubeCount,
+        CubeDim,
+        prelude::*,
+        tune::{AutotuneKey, LocalTuner, Tunable, TunableSet, TuneGroup, anchor, local_tuner},
+    },
+    element::BoolElement,
+    ops::numeric::empty_device,
+    tensor::CubeTensor,
 };
 use serde::{Deserialize, Serialize};
 
@@ -28,10 +28,10 @@ use crate::kernels::train::{
             Wkv7StatetuneForwardPrimitiveInputs,
         },
         kernel::{
+            Wkv7ForwardInputsLaunch,
             wkv7_pretrain_forward_kernel,
             wkv7_pretrain_forward_output_kernel,
             wkv7_state_forward_kernel,
-            Wkv7ForwardInputsLaunch,
         },
     },
 };

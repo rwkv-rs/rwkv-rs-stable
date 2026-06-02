@@ -108,20 +108,38 @@ pub(crate) fn compare_timing(
     baseline: &BTreeMap<String, TimeFile>,
 ) -> Result<TimingComparison> {
     let (mut rows, mut compared, mut missing, mut extra) = (Vec::new(), 0, 0, 0);
-    let ignored = actual
+    let mut ignored = 0;
+    let mut comparable = BTreeSet::new();
+
+    for module in actual
         .keys()
         .chain(baseline.keys())
         .collect::<BTreeSet<_>>()
-        .into_iter()
-        .filter(|module| !is_canonical_timing_module(module))
-        .count();
+    {
+        match timing_module_kind(module) {
+            TimingModuleKind::Required => {
+                comparable.insert(module.clone());
+            }
+            TimingModuleKind::Optional => {
+                if actual.contains_key(module) && baseline.contains_key(module) {
+                    comparable.insert(module.clone());
+                } else {
+                    ignored += 1;
+                }
+            }
+            TimingModuleKind::Ignored => {
+                ignored += 1;
+            }
+        }
+    }
+
     let actual = actual
         .iter()
-        .filter(|(module, _)| is_canonical_timing_module(module))
+        .filter(|(module, _)| comparable.contains(*module))
         .collect::<BTreeMap<_, _>>();
     let baseline = baseline
         .iter()
-        .filter(|(module, _)| is_canonical_timing_module(module))
+        .filter(|(module, _)| comparable.contains(*module))
         .collect::<BTreeMap<_, _>>();
 
     for (module, actual_file) in &actual {
@@ -189,26 +207,34 @@ fn validate_time_record(record: &TimeRecord) -> Result<()> {
     Ok(())
 }
 
-fn is_canonical_timing_module(module: &str) -> bool {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TimingModuleKind {
+    Required,
+    Optional,
+    Ignored,
+}
+
+fn timing_module_kind(module: &str) -> TimingModuleKind {
     match module {
         "embedding"
         | "layer_norm0"
         | "lm_head"
         | "loss/l2wrap_cross_entropy"
-        | "loss/head_l2wrap_cross_entropy" => return true,
+        | "loss/head_l2wrap_cross_entropy" => return TimingModuleKind::Required,
+        "lm_head/projection" => return TimingModuleKind::Optional,
         _ => {}
     }
 
     let Some(rest) = module.strip_prefix("cells/cell_") else {
-        return false;
+        return TimingModuleKind::Ignored;
     };
     let Some((cell, name)) = rest.split_once('/') else {
-        return false;
+        return TimingModuleKind::Ignored;
     };
     if cell.len() != 4 || !cell.bytes().all(|b| b.is_ascii_digit()) {
-        return false;
+        return TimingModuleKind::Ignored;
     }
-    matches!(
+    if matches!(
         name,
         "pre_layer_norm_for_time_mix"
             | "time_mixer"
@@ -216,7 +242,11 @@ fn is_canonical_timing_module(module: &str) -> bool {
             | "pre_layer_norm_for_channel_mix"
             | "channel_mixer"
             | "embedded_context_after_channel_mixer"
-    )
+    ) {
+        TimingModuleKind::Required
+    } else {
+        TimingModuleKind::Ignored
+    }
 }
 
 fn compare_time_one(actual: &TimeFile, baseline: &TimeFile) -> TimeRow {
@@ -243,11 +273,16 @@ fn compare_time_one(actual: &TimeFile, baseline: &TimeFile) -> TimeRow {
             "timing profile is cold/debug; speedup is not reported".to_owned(),
         )
     } else {
-        (
-            "PASS",
-            Some(baseline_ns as f64 / actual_ns as f64),
-            String::new(),
-        )
+        let speedup = baseline_ns as f64 / actual_ns as f64;
+        if speedup < 1.0 {
+            (
+                "FAIL",
+                Some(speedup),
+                "actual timing is slower than baseline".to_owned(),
+            )
+        } else {
+            ("PASS", Some(speedup), String::new())
+        }
     };
 
     TimeRow {

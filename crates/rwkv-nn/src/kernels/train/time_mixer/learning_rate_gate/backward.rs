@@ -1,51 +1,51 @@
 use burn::{
     backend::autodiff::{
+        Autodiff,
+        NodeId,
         checkpoint::{base::Checkpointer, strategy::CheckpointStrategy},
         grads::Gradients,
         ops::{Backward, Ops, OpsKind},
-        Autodiff,
-        NodeId,
     },
-    tensor::{ops::FloatTensor, Shape},
+    tensor::{Shape, ops::FloatTensor},
 };
 use burn_cubecl::{
-    cubecl::{
-        prelude::*,
-        tensor_vector_size_parallel,
-        tune::{
-            anchor,
-            local_tuner,
-            AutotuneKey,
-            AutotuneOutput,
-            LocalTuner,
-            Tunable,
-            TunableSet,
-            TuneGroup,
-        },
-        CubeCount,
-        CubeDim,
-    },
-    element::BoolElement,
-    ops::numeric::{empty_device, zeros_client},
-    tensor::CubeTensor,
     CubeBackend,
     CubeElement,
     CubeRuntime,
     CubeTuneId,
     FloatElement,
     IntElement,
+    cubecl::{
+        CubeCount,
+        CubeDim,
+        prelude::*,
+        tensor_vector_size_parallel,
+        tune::{
+            AutotuneKey,
+            AutotuneOutput,
+            LocalTuner,
+            Tunable,
+            TunableSet,
+            TuneGroup,
+            anchor,
+            local_tuner,
+        },
+    },
+    element::BoolElement,
+    ops::numeric::{empty_device, zeros_client},
+    tensor::CubeTensor,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::kernels::train::{
-    layout::{assert_linear_readable, CubeHardwareFingerprint},
+    layout::{CubeHardwareFingerprint, assert_linear_readable},
     time_mixer::learning_rate_gate::{
+        LearningRateGateBackend,
         io::{LearningRateGateBackwardPrimitiveOutputs, LearningRateGateForwardPrimitiveInputs},
         kernel::{
             learning_rate_gate_backward_finalize_kernel,
             learning_rate_gate_backward_partial_kernel,
         },
-        LearningRateGateBackend,
     },
 };
 

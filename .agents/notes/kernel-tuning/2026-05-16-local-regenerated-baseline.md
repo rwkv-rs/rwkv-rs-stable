@@ -1,0 +1,106 @@
+# Local Regenerated Baseline
+
+- Date: 2026-05-16.
+- Branch/worktree: `kernel-tuning-local-regenerated-baseline-20260516` in the existing dirty workspace.
+- Dirty-tree constraint: this checkout carries broad unrelated uncommitted workspace changes plus prior kernel-tuning notes. This branch is scoped to baseline provenance/measurement and this note; it should not edit kernels.
+- Prior-note/source search command:
+  - `rg -n "local baseline|regenerated baseline|trace-train|RWKV_TRACE_ROOT|rwkv-rs-test|test_gen/rwkv_lm|baseline provenance|checked-in fixture" .agents/notes/kernel-tuning /root/.codex/memories/MEMORY.md -S`
+- Matched prior evidence:
+  - Remote acceptance uses a regenerated baseline under `~/Projects/Packages/rwkv-rs-test/test_gen/rwkv_lm/bf16/case_000000`.
+  - Local acceptance currently uses checked-in `crates/rwkv-test/test_data/rwkv_lm/bf16/case_000000` and fails at `0.92x` despite activation passing.
+  - `2026-05-16-local-short-kernel-provenance.md` confirms the local baseline timing files are checked-in fixture files introduced by `c2d3482`, not a fresh local regenerated baseline.
+  - Memory says remote results must not be generalized to the local baseline without proof, and baseline provenance/device/toolchain drift must be checked.
+- Companion repo inspection:
+  - `/mnt/g/Projects/Packages/rwkv-rs-test` exists.
+  - `train-repo/rwkv-lm/trace-train.sh` exists.
+- Machine/GPU: local `NVIDIA GeForce RTX 5090`, compute capability `12.0`; use only after a fresh `nvidia-smi` preflight.
+- Shape/dtype: CUDA BF16 `rwkv_lm`, `B=16,T=512,D=768`, rows `8192`.
+- Hypothesis: local speedup may be understated because the checked-in baseline fixture is not regenerated under the current local trace workflow. A local regenerated baseline will separate true kernel underperformance from baseline provenance mismatch.
+- Expected keep/revert boundary: keep regenerated baseline artifacts under `rwkv-rs-test/test_gen/...` as generated evidence only. Do not overwrite checked-in `crates/rwkv-test/test_data`. If regenerated-baseline compare still stays below `1.0`, continue kernel work; if it exceeds `1.0`, record that the local checked-in baseline is the remaining provenance issue and do a completion audit.
+- 13:45 CST inspection result:
+  - `rwkv-rs-test/train-repo/rwkv-lm/trace-train.sh` uses the real `uv run python train.py` training entrypoint and defaults `RWKV_TRACE_ROOT` to `/mnt/g/Projects/Packages/rwkv-rs-test/test_gen`.
+  - `rwkv-rs-test/README.md` names the average timing baseline command as `RWKV_TRACE_WARMUP=1 RWKV_TRACE_REPEAT=3 bash trace-train.sh`.
+  - `rwkv-rs-test/docs/trace-contract.md` confirms `test_gen/rwkv_lm/bf16/case_000000`, timing under `timing/**`, and the rule that stateful/mutating kernels must not repeat the same callable without rebuilding equivalent state.
+- Next command: inspect `train-repo/rwkv-lm` for `RWKV_TRACE_WARMUP` / `RWKV_TRACE_REPEAT` handling before running the generator.
+- 13:45 CST repeat/warmup inspection:
+  - `rg -n "RWKV_TRACE_(WARMUP|REPEAT|ROOT|ONCE)|trace_|time\\.json|perf_counter|synchronize" train-repo/rwkv-lm -S` confirms `src/trace.py` reads `RWKV_TRACE_REPEAT` and `RWKV_TRACE_WARMUP`, syncs CUDA around measured callables, and writes timing files under `case_root() / "timing" / f"{module}.time.json"`.
+  - Existing `/mnt/g/Projects/Packages/rwkv-rs-test/test_gen/rwkv_lm/bf16/case_000000` contains old adjacent `.time.json` artifacts such as `cells/cell_0000/embedded_context_after_channel_mixer.time.json`; do not reuse it as a clean current-contract baseline.
+- Next command: inspect `src/trace.py` cleanup behavior and use a fresh local output root for regenerated-baseline evidence.
+- 13:45 CST trace helper inspection:
+  - `src/trace.py` has no output-root cleanup; it creates directories and overwrites touched files only. A regenerated baseline must use a fresh `RWKV_TRACE_ROOT` to avoid stale files.
+  - `trace()` runs warmup samples, then repeats `target(*args, **kwargs)` with `_sync_tensors(args)`, `_sync_tensors(kwargs)`, and `_sync_tensors(result)` around the measured interval. It writes `elapsed_ns = round(avg(samples_ns))`, plus `repeat`, `warmup`, and `samples_ns`.
+  - Local model file exists at `weights/rwkv-init-0.1b-ctx512-test.pth`.
+  - Fresh local GPU preflight at 13:45 CST: `NVIDIA GeForce RTX 5090`, compute capability `12.0`, utilization `5%`, memory `3015/32607 MiB`, and no compute apps printed by `nvidia-smi --query-compute-apps`.
+- Candidate generation command, only if we decide to use the local GPU:
+  - `RWKV_RS_STABLE_ROOT=/mnt/g/Projects/Packages/rwkv-rs-stable RWKV_TRACE_ROOT=/mnt/g/Projects/Packages/rwkv-rs-test/test_gen_local_regen_20260516 RWKV_TRACE_WARMUP=1 RWKV_TRACE_REPEAT=3 bash train-repo/rwkv-lm/trace-train.sh`
+- Local GPU constraint: the user said the local GPU may be used for other work, so do not run the generator unless this branch explicitly records that the GPU is idle enough for a one-off trace run.
+- Next command: inspect `compare-rwkv-nn` CLI flags for using the fresh generated baseline without copying it into checked-in fixture paths.
+- 13:45 CST compare CLI inspection:
+  - `CompareRwkvNnArgs` has a `--baseline` path option, so the generated baseline can stay under `/mnt/g/Projects/Packages/rwkv-rs-test/test_gen_local_regen_20260516/rwkv_lm/bf16/case_000000`.
+  - `compare_rwkv_nn` passes `allow_extra_baseline: true`; activation extras from the Python trace baseline will not fail if the Rust actual intentionally does not emit them.
+  - `rwkv_nn_trace::generate` removes the actual output directory before writing, copies `embedding/token_ids.safetensors` from the provided baseline, and runs `warmup + repeat` timing before one output-writing forward.
+- Decision before generation: the 13:45 CST GPU preflight showed no active compute apps and low utilization, so run one isolated local baseline generation. Treat the timing result as local-provenance evidence only; if another GPU workload appears, mark the run noisy and rerun later.
+- Next command:
+  - `RWKV_RS_STABLE_ROOT=/mnt/g/Projects/Packages/rwkv-rs-stable RWKV_TRACE_ROOT=/mnt/g/Projects/Packages/rwkv-rs-test/test_gen_local_regen_20260516 RWKV_TRACE_WARMUP=1 RWKV_TRACE_REPEAT=3 bash train-repo/rwkv-lm/trace-train.sh`
+- 13:46 CST invalid generation attempt:
+  - Command from `/mnt/g/Projects/Packages/rwkv-rs-test`: `RWKV_RS_STABLE_ROOT=/mnt/g/Projects/Packages/rwkv-rs-stable RWKV_TRACE_ROOT=/mnt/g/Projects/Packages/rwkv-rs-test/test_gen_local_regen_20260516 RWKV_TRACE_WARMUP=1 RWKV_TRACE_REPEAT=3 bash train-repo/rwkv-lm/trace-train.sh`
+  - Result: failed before model/training execution because the script invokes `uv run python train.py` relative to cwd and looked for `/mnt/g/Projects/Packages/rwkv-rs-test/train.py`.
+  - Boundary: invalid run, no timing evidence.
+- Corrected next command from `/mnt/g/Projects/Packages/rwkv-rs-test/train-repo/rwkv-lm`:
+  - `RWKV_RS_STABLE_ROOT=/mnt/g/Projects/Packages/rwkv-rs-stable RWKV_TRACE_ROOT=/mnt/g/Projects/Packages/rwkv-rs-test/test_gen_local_regen_20260516 RWKV_TRACE_WARMUP=1 RWKV_TRACE_REPEAT=3 bash trace-train.sh`
+- 13:49-13:52 CST generation result:
+  - Corrected command completed with exit code 0.
+  - It ran the real Lightning/DeepSpeed BF16 training entrypoint on local `cuda:0` for one step and exited after `RWKV_TRACE_ONCE`.
+  - Output root: `/mnt/g/Projects/Packages/rwkv-rs-test/test_gen_local_regen_20260516/rwkv_lm/bf16/case_000000`.
+  - Treat as a local regenerated baseline candidate; next command validates file layout and timing metadata before using it as baseline.
+- 13:52 CST generated baseline layout check:
+  - `find ... -type f` summary: `safetensors=57`, `timing=76`.
+  - `find ... -name '*.time.json' ! -path '*/timing/*'` printed no files, so the fresh output has no old adjacent timing artifacts.
+  - Attempted `jq` metadata inspection failed because `jq` is not installed; this is an inspection-tool failure only, not a trace failure.
+- Next command: inspect representative timing JSON files with plain text tools, then run `compare-rwkv-nn --baseline /mnt/g/Projects/Packages/rwkv-rs-test/test_gen_local_regen_20260516/rwkv_lm/bf16/case_000000`.
+- 13:53 CST representative timing metadata:
+  - `timing/layer_norm0.time.json`: `elapsed_ns=892611`, `repeat=3`, `warmup=1`, samples `[1518228, 1040265, 119341]`.
+  - `timing/cells/cell_0000/channel_mixer.time.json`: `elapsed_ns=601795`, `repeat=3`, `warmup=1`.
+  - `timing/loss/l2wrap_cross_entropy.time.json`: `elapsed_ns=1144237`, `repeat=3`, `warmup=1`.
+  - Post-generation GPU preflight: utilization `5%`, memory `3098/32607 MiB`, and no compute apps printed.
+- Next command:
+  - `cargo run --release -p rwkv-test --features cuda -- compare-rwkv-nn --color never --baseline /mnt/g/Projects/Packages/rwkv-rs-test/test_gen_local_regen_20260516/rwkv_lm/bf16/case_000000 --repeat 3 --warmup 1`
+- 13:54-13:58 CST compare against local regenerated baseline:
+  - Command: `cargo run --release -p rwkv-test --features cuda -- compare-rwkv-nn --color never --baseline /mnt/g/Projects/Packages/rwkv-rs-test/test_gen_local_regen_20260516/rwkv_lm/bf16/case_000000 --repeat 3 --warmup 1`
+  - Exit code: 1 because row-level timing failures remain.
+  - Activation: `compared=54 passed=54 failed=0 missing=0 extra=0`.
+  - Timing summary: `compared=76 passed=22 failed=54 missing=0 extra=0 ignored=1 actual_total_ms=39.984 baseline_total_ms=97.609 speedup=2.44x`.
+  - Group totals:
+    - `cells/*/time_mixer`: `22.589ms` actual vs `82.936ms` baseline, `3.67x`.
+    - `embedding`: `0.178ms` actual vs `0.765ms` baseline, `4.29x`.
+    - `layer_norm0`: `0.288ms` actual vs `0.893ms` baseline, `3.10x`.
+    - `loss/l2wrap_cross_entropy`: `0.961ms` actual vs `1.144ms` baseline, `1.19x`.
+    - Slower groups: `cells/*/channel_mixer` `0.81x`, residual/tiny add rows `0.55x-0.89x`, pre-LN rows `0.44x/0.79x`, `lm_head` `0.46x`.
+  - Interpretation: the local total speedup target is now satisfied when the baseline is regenerated locally, but this is not a clean acceptance gate because row-level failures remain. The next investigation should verify timing boundary equivalence for short rows (`lm_head`, residual/add rows, pre-LN) before treating them as kernel regressions.
+- Next command: inspect Python `rwkv-lm` trace call sites for `lm_head`, residual/add rows, pre-LN, and channel mixer timing boundary against Rust `TraceWriter`.
+- 13:59 CST timing-boundary first inspection:
+  - Python call sites found in `rwkv-rs-test/train-repo/rwkv-lm/src/model.py`:
+    - `layer_norm0`: `trace("layer_norm0", lambda: self.ln0(x), ...)`.
+    - pre-LN rows: `trace(..., lambda: self.ln1(x))` / `trace(..., lambda: self.ln2(x))`.
+    - residual rows: `trace(..., lambda: x + x_attn)` and `trace(..., lambda: x + x_ffn)`.
+    - channel mixer: `trace(..., lambda: self.ffn(x_cmix), ...)`.
+    - `lm_head`: `trace("lm_head", lambda: self.ln_out(x), outputs="lm_head/embedded_context.safetensors")`.
+  - Rust call sites in `crates/rwkv-test/src/rwkv_nn_trace/writer.rs`:
+    - `lm_head` is `trace_layer_norm("lm_head", ..., &model.output_norm, embedded_context)`.
+    - Rust also records timing-only `lm_head/projection`, and the generated actual file shows `elapsed_ns=5034966`, but the Python baseline has no `timing/lm_head/projection.time.json`.
+  - Representative generated files:
+    - actual `lm_head`: `134243ns`, baseline `lm_head`: `61690ns`.
+    - actual `lm_head/projection`: `5034966ns`, absent from baseline, currently ignored by timing canonical logic.
+    - actual `cell_0000/pre_layer_norm_for_channel_mix`: `148101ns`, baseline `76616ns`.
+    - actual `cell_0000/embedded_context_after_time_mixer`: `105548ns`, baseline `83603ns`.
+  - Interpretation: `lm_head 0.46x` is only the output LayerNorm row, not the projection+loss head. The total unembed projection is currently outside Python canonical timing, so row-level failures should be classified by boundary before kernel changes.
+- Next command: open the exact Python and Rust call-site snippets and inspect channel mixer boundary details.
+- 14:00 CST call-site inspection result:
+  - Python `Block.forward` and Rust `TraceWriter::forward_cells` use the same high-level module sequence: first-cell LN0, pre-LN for time mix, time mixer, residual add, pre-LN for channel mix, channel mixer, residual add.
+  - Python channel mixer is `RWKV_CMix_x070.forward -> _CmixLayerV2Fn.apply(x, x_k, key.weight, value.weight)`. Rust channel mixer is `ChannelMixer::forward -> channel_mixer(...)`, which runs mix, key matmul, ReLU-square, value matmul through Burn/CubeCL. This is a real same-boundary kernel/backend comparison.
+  - Python `lm_head` is only `ln_out(x)`; Rust `lm_head` is only `layer_norm(..., model.layer_norm_for_unembed, ...)`. The projection row is separate in Rust and absent from Python baseline, so canonical `lm_head` currently means output LayerNorm only.
+  - Residual and pre-LN rows are same semantic boundary but very short, with sample-level variance large enough that row-by-row pass/fail is noisy. They should not drive kernel rewrites without profiler evidence.
+- Decision for this branch:
+  - Keep the local regenerated baseline as evidence that local total speedup is `2.44x`, not `0.92x`, once baseline provenance is aligned.
+  - Do not edit kernels on this branch.
+  - Remaining meaningful local kernel gap from this run is channel mixer (`0.81x`) under a local regenerated Python CUDA baseline. Any further work on it needs a new branch because this branch's hypothesis was baseline provenance, not channel mixer implementation.

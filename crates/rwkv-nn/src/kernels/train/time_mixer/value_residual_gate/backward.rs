@@ -1,46 +1,47 @@
 use burn::{
     backend::autodiff::{
+        Autodiff,
+        NodeId,
         checkpoint::{base::Checkpointer, strategy::CheckpointStrategy},
         grads::Gradients,
         ops::{Backward, Ops, OpsKind},
-        Autodiff,
-        NodeId,
     },
-    tensor::{ops::FloatTensor, Shape},
+    tensor::{Shape, ops::FloatTensor},
 };
 use burn_cubecl::{
-    cubecl::{
-        calculate_cube_count_elemwise,
-        prelude::*,
-        tensor_vector_size_parallel,
-        tune::{
-            anchor,
-            local_tuner,
-            AutotuneKey,
-            AutotuneOutput,
-            LocalTuner,
-            Tunable,
-            TunableSet,
-            TuneGroup,
-        },
-        CubeCount,
-        CubeDim,
-    },
-    element::BoolElement,
-    ops::numeric::{empty_device, zeros_client},
-    tensor::CubeTensor,
     CubeBackend,
     CubeElement,
     CubeRuntime,
     CubeTuneId,
     FloatElement,
     IntElement,
+    cubecl::{
+        CubeCount,
+        CubeDim,
+        calculate_cube_count_elemwise,
+        prelude::*,
+        tensor_vector_size_parallel,
+        tune::{
+            AutotuneKey,
+            AutotuneOutput,
+            LocalTuner,
+            Tunable,
+            TunableSet,
+            TuneGroup,
+            anchor,
+            local_tuner,
+        },
+    },
+    element::BoolElement,
+    ops::numeric::{empty_device, zeros_client},
+    tensor::CubeTensor,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::kernels::train::{
-    layout::{assert_linear_readable, CubeHardwareFingerprint},
+    layout::{CubeHardwareFingerprint, assert_linear_readable},
     time_mixer::value_residual_gate::{
+        ValueResidualGateBackend,
         io::{ValueResidualGateBackwardPrimitiveOutputs, ValueResidualGateForwardPrimitiveInputs},
         kernel::{
             value_residual_gate_backward_elementwise_kernel,
@@ -48,7 +49,6 @@ use crate::kernels::train::{
             value_residual_gate_base_reduce_finalize_kernel,
             value_residual_gate_base_reduce_partial_kernel,
         },
-        ValueResidualGateBackend,
     },
 };
 
@@ -81,8 +81,12 @@ where
                 grads: &mut Gradients,
                 checkpointer: &mut Checkpointer,
             ) {
-                let [node_value, node_value_from_first_cell, node_gate_base, node_gate_input] =
-                    ops.parents;
+                let [
+                    node_value,
+                    node_value_from_first_cell,
+                    node_gate_base,
+                    node_gate_input,
+                ] = ops.parents;
                 let output_grad = grads.consume::<CubeBackend<R, F, I, BT>>(&ops.node);
                 let (value_state, value_from_first_cell_state, gate_base_state, gate_input_state) =
                     ops.state;

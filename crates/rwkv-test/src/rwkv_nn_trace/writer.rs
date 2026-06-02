@@ -2,11 +2,16 @@ use std::{collections::HashMap, fs, path::Path, time::Instant};
 
 use anyhow::{Context, Result, bail};
 use burn::{
+    nn::LayerNorm,
     prelude::{Backend, Int, Tensor},
     tensor::{DType, Element},
 };
 use rwkv_nn::{
-    kernels::train::{TrainBackend, lm_head_l2wrap_ce::lm_head_l2wrap_ce},
+    kernels::train::{
+        TrainBackend,
+        layer_norm::{LayerNormBackend, layer_norm},
+        lm_head_l2wrap_ce::lm_head_l2wrap_ce,
+    },
     models::lm::RwkvLM,
     modules::{channel_mixer::ChannelMixerIO, time_mixer::TimeMixerIO},
 };
@@ -23,7 +28,7 @@ pub(super) struct TraceWriter<'a, B: Backend> {
 
 impl<'a, B> TraceWriter<'a, B>
 where
-    B: TrainBackend,
+    B: TrainBackend + LayerNormBackend,
 {
     pub(super) fn new(root: &'a Path, device: &'a B::Device) -> Self {
         Self {
@@ -45,15 +50,22 @@ where
             self.trace_float("embedding", "embedding/embedded_context", || {
                 model.embed.forward(inputs)
             })?;
-        let embedded_context =
-            self.trace_float("layer_norm0", "layer_norm0/embedded_context", || {
-                model.layer_norm_for_first_cell.forward(embedded_context)
-            })?;
+        let embedded_context = self.trace_layer_norm(
+            "layer_norm0",
+            "layer_norm0/embedded_context",
+            &model.layer_norm_for_first_cell,
+            embedded_context,
+        )?;
         let embedded_context = self.forward_cells(model, embedded_context)?;
-        let embedded_context = self.trace_float("lm_head", "lm_head/embedded_context", || {
-            model.layer_norm_for_unembed.forward(embedded_context)
+        let embedded_context = self.trace_layer_norm(
+            "lm_head",
+            "lm_head/embedded_context",
+            &model.layer_norm_for_unembed,
+            embedded_context,
+        )?;
+        let logits = self.trace_float_timing("lm_head/projection", "lm_head projection", || {
+            model.unembed.forward(embedded_context)
         })?;
-        let logits = model.unembed.forward(embedded_context);
         let loss = self.trace_float_as(
             "loss/l2wrap_cross_entropy",
             "loss/l2wrap_cross_entropy",
@@ -76,11 +88,11 @@ where
             let prefix = format!("cells/cell_{cell_index:04}");
             let embedded_context_before_cell = embedded_context;
 
-            let embedded_context_normalized =
-                self.trace_float_timing(&format!("{prefix}/pre_layer_norm_for_time_mix"), || {
-                    cell.pre_layer_norm_for_time_mix
-                        .forward(embedded_context_before_cell.clone())
-                })?;
+            let embedded_context_normalized = self.trace_layer_norm_timing(
+                &format!("{prefix}/pre_layer_norm_for_time_mix"),
+                &cell.pre_layer_norm_for_time_mix,
+                embedded_context_before_cell.clone(),
+            )?;
             let time_mixer_input = TimeMixerIO {
                 embedded_context: embedded_context_normalized,
                 value_from_first_cell: value_from_first_cell.clone(),
@@ -90,19 +102,18 @@ where
                 .trace_time_mixer(&format!("{prefix}/time_mixer"), || {
                     cell.time_mixer.forward(time_mixer_input)
                 })?;
-            embedded_context = self.trace_float(
+            embedded_context = self.trace_residual_add(
                 &format!("{prefix}/embedded_context_after_time_mixer"),
                 &format!("{prefix}/embedded_context_after_time_mixer"),
-                || embedded_context_before_cell + time_mixer_output.embedded_context,
+                embedded_context_before_cell,
+                time_mixer_output.embedded_context,
             )?;
             value_from_first_cell = time_mixer_output.value_from_first_cell;
 
-            let embedded_context_normalized = self.trace_float_timing(
+            let embedded_context_normalized = self.trace_layer_norm_timing(
                 &format!("{prefix}/pre_layer_norm_for_channel_mix"),
-                || {
-                    cell.pre_layer_norm_for_channel_mix
-                        .forward(embedded_context.clone())
-                },
+                &cell.pre_layer_norm_for_channel_mix,
+                embedded_context.clone(),
             )?;
             let channel_mixer_input = ChannelMixerIO {
                 embedded_context: embedded_context_normalized,
@@ -112,10 +123,11 @@ where
                 .trace_channel_mixer(&format!("{prefix}/channel_mixer"), || {
                     cell.channel_mixer.forward(channel_mixer_input)
                 })?;
-            embedded_context = self.trace_float(
+            embedded_context = self.trace_residual_add(
                 &format!("{prefix}/embedded_context_after_channel_mixer"),
                 &format!("{prefix}/embedded_context_after_channel_mixer"),
-                || embedded_context + channel_mixer_output.embedded_context,
+                embedded_context,
+                channel_mixer_output.embedded_context,
             )?;
         }
 
@@ -127,6 +139,7 @@ where
         prefix: &str,
         work: impl FnOnce() -> TimeMixerIO<B>,
     ) -> Result<TimeMixerIO<B>> {
+        B::sync(self.device).context("failed to sync time mixer inputs")?;
         let start = Instant::now();
         let output = work();
         B::sync(self.device).context("failed to sync timed time mixer")?;
@@ -137,10 +150,12 @@ where
                 &format!("{prefix}/embedded_context"),
                 output.embedded_context.clone(),
             )?;
-            self.write_float(
-                &format!("{prefix}/value_from_first_cell"),
-                output.value_from_first_cell.clone(),
-            )?;
+            if prefix == "cells/cell_0000/time_mixer" {
+                self.write_float(
+                    &format!("{prefix}/value_from_first_cell"),
+                    output.value_from_first_cell.clone(),
+                )?;
+            }
         }
         Ok(output)
     }
@@ -150,6 +165,7 @@ where
         prefix: &str,
         work: impl FnOnce() -> ChannelMixerIO<B>,
     ) -> Result<ChannelMixerIO<B>> {
+        B::sync(self.device).context("failed to sync channel mixer inputs")?;
         let start = Instant::now();
         let output = work();
         B::sync(self.device).context("failed to sync timed channel mixer")?;
@@ -180,6 +196,7 @@ where
         dtype: DType,
         work: impl FnOnce() -> Tensor<B, D>,
     ) -> Result<Tensor<B, D>> {
+        B::sync(self.device).with_context(|| format!("failed to sync trace inputs for {name}"))?;
         let start = Instant::now();
         let output = work();
         B::sync(self.device).with_context(|| format!("failed to sync timed trace {name}"))?;
@@ -194,13 +211,75 @@ where
     fn trace_float_timing<const D: usize>(
         &mut self,
         module: &str,
+        name: &str,
         work: impl FnOnce() -> Tensor<B, D>,
     ) -> Result<Tensor<B, D>> {
+        B::sync(self.device).with_context(|| format!("failed to sync trace inputs for {name}"))?;
         let start = Instant::now();
         let output = work();
+        B::sync(self.device).with_context(|| format!("failed to sync timed trace {name}"))?;
+        let elapsed_ns = start.elapsed().as_nanos() as u64;
+        self.write_time(module, elapsed_ns)?;
+        Ok(output)
+    }
+
+    fn trace_layer_norm(
+        &mut self,
+        module: &str,
+        name: &str,
+        norm: &LayerNorm<B>,
+        input: Tensor<B, 3>,
+    ) -> Result<Tensor<B, 3>>
+    where
+        B: LayerNormBackend,
+    {
+        let output = self.trace_layer_norm_timing(module, norm, input)?;
+        if self.write_outputs {
+            self.write_float(name, output.clone())?;
+        }
+        Ok(output)
+    }
+
+    fn trace_layer_norm_timing(
+        &mut self,
+        module: &str,
+        norm: &LayerNorm<B>,
+        input: Tensor<B, 3>,
+    ) -> Result<Tensor<B, 3>>
+    where
+        B: LayerNormBackend,
+    {
+        B::sync(self.device)
+            .with_context(|| format!("failed to sync trace inputs for {module}"))?;
+        let start = Instant::now();
+        let beta = norm
+            .beta
+            .as_ref()
+            .expect("rwkv trace layer norm requires affine beta")
+            .val();
+        let output = layer_norm(input, norm.gamma.val(), beta, 1e-5);
         B::sync(self.device).with_context(|| format!("failed to sync timed trace {module}"))?;
         let elapsed_ns = start.elapsed().as_nanos() as u64;
         self.write_time(module, elapsed_ns)?;
+        Ok(output)
+    }
+
+    fn trace_residual_add(
+        &mut self,
+        module: &str,
+        name: &str,
+        lhs: Tensor<B, 3>,
+        rhs: Tensor<B, 3>,
+    ) -> Result<Tensor<B, 3>> {
+        B::sync(self.device).with_context(|| format!("failed to sync trace inputs for {name}"))?;
+        let start = Instant::now();
+        let output = lhs + rhs;
+        B::sync(self.device).with_context(|| format!("failed to sync timed trace {name}"))?;
+        let elapsed_ns = start.elapsed().as_nanos() as u64;
+        self.write_time(module, elapsed_ns)?;
+        if self.write_outputs {
+            self.write_float(name, output.clone())?;
+        }
         Ok(output)
     }
 

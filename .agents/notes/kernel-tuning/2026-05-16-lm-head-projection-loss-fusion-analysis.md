@@ -1,0 +1,51 @@
+# Lm Head Projection Loss Fusion Analysis
+
+- Date: 2026-05-16
+- Branch/worktree: `kernel-tuning-lm-head-projection-loss-fusion-analysis-20260516` in the existing dirty local checkout.
+- Dirty-tree constraint: this branch inherits broad unrelated workspace changes and prior kernel notes. This attempt is read-only feasibility analysis; no kernel edit is allowed until a later branch states a concrete implementation and keep/revert boundary.
+- Prior-note/source search command:
+  - `rg -n "lm_head|l2wrap|loss|timing_scope|canonical_compute|time.json|TraceTiming|record|perf_counter|timing" crates/rwkv-test/src crates/rwkv-nn/src crates/rwkv-test/examples .agents/notes/kernel-tuning -S`
+- Matched prior evidence:
+  - `2026-05-16-lm-head-forward-target-logit.md`, `2026-05-16-lm-head-forward-atomic-loss.md`, `2026-05-16-lm-head-forward-online-softmax.md`, and `2026-05-16-lm-head-forward-online-softmax-gb10.md` only changed the loss row kernel after logits already exist; they did not fuse the unembed projection.
+  - `2026-05-16-lm-head-projection-timing-boundary.md` proves canonical `.time.json` excludes the unembed projection matmul, while remote `nsys` shows that projection as one of the largest GPU surfaces.
+  - Remote `nsys-value-residual-gate-vector-axis` profile shows the dominant matmul group `matmul_entry_lhs_bf16_lhs_size_1_rhs_bf16_rhs_size_1_acc_bf16_acc_size_8` with `3` launches and large total GPU time; this is consistent with `B*T=8192`, `D=768`, `vocab=65536` unembed projection.
+- Changed boundary: this is not another logits-postprocessing kernel. It asks whether the projection matmul and CE/l2wrap can be fused to avoid materializing full logits, or whether the existing TMA matmul is already the right primitive and only trace timing should be fixed.
+- Machine/GPU: source and profiler artifact analysis locally; no local GPU. Remote profiler artifact comes from `10.100.1.253` GB10.
+- Shape/dtype: CUDA BF16 `rwkv_lm`, hidden `[8192,768]`, unembed weight `[65536,768]` or equivalent Linear layout, logits `[8192,65536]`, targets `[16,512]`.
+- Command to run: inspect `lm_head_l2wrap_ce` forward kernel, `RwkvLM::forward_logits`, Burn `Linear` call shape, and existing notes to estimate implementation risk, memory traffic, and numerical/deterministic constraints for a projection+loss fused kernel.
+- Expected decision boundary: if a fused projection-loss kernel would require reimplementing a full GEMM with poor reuse versus Cubek/TMA, close as too risky and keep tuning around existing matmul. If there is a narrower candidate such as chunked vocab row-loss with shared hidden tile and deterministic f32 reductions, open a new implementation branch with trace-backed accuracy and profiler gates.
+
+## 2026-05-16 Continuation
+
+- Source inspection result:
+  - `crates/rwkv-nn/src/models/lm.rs` runs `self.unembed.forward(embedded_context_normalized)` before `lm_head_l2wrap_ce(logits, targets)`.
+  - `crates/rwkv-nn/src/kernels/train/lm_head_l2wrap_ce/forward.rs` accepts only `logits` and `targets`; the fused kernel cannot see hidden states or unembed weights.
+  - `lm_head_l2wrap_ce_forward_row_kernel` scans each logits row for max and sum after the `[8192, 65536]` logits tensor has already been materialized.
+- Interpretation so far: all existing lm-head-loss implementation attempts only optimize post-projection row reduction. A projection+loss fused path would need a new primitive/API boundary that consumes hidden states, unembed weight, optional bias, and targets.
+- Next command: inspect existing `target/rwkv-test/nsys-value-residual-gate-vector-axis.sqlite` for kernel totals and launch metadata, especially BF16 Cubek matmul and `lm_head_l2wrap_ce_forward_row_kernel`, using sqlite only. This is profiler-artifact analysis, not a new GPU run.
+- Invalid local artifact query:
+  - `target/rwkv-test/nsys-value-residual-gate-vector-axis.sqlite` is not present in this local checkout.
+  - `sqlite3` CLI is not installed locally.
+  - No profiler conclusion is drawn from this failed query.
+- Next command: locate local `nsys*.sqlite` artifacts and, if needed, inspect the existing remote artifact on `10.100.1.253` without launching a new profile.
+- Artifact location result:
+  - Local broad `find target -path '*nsys*.sqlite'` was too slow in the large target tree and was killed without output; no conclusion is drawn from it.
+  - Remote `10.100.1.253` has existing profiler artifacts under `/home/caizus/Projects/Packages/rwkv-rs-stable/target/rwkv-test/`, including `nsys-value-residual-gate-vector-axis.sqlite` and `nsys-lm-head-online-gb10.sqlite`.
+- Next command: run a read-only remote sqlite query against `nsys-value-residual-gate-vector-axis.sqlite` to rank CUDA kernels by total duration and inspect launch metadata for the dominant matmul and loss row kernels.
+- Remote sqlite top-kernel result from `nsys-value-residual-gate-vector-axis.sqlite`:
+  - `matmul_entry_lhs_bf16_lhs_size_1_rhs_bf16_rhs_size_1_acc_bf16_acc_size_8`: `327` launches, `120.657ms` total, `368.982us` average, max `122` registers/thread, dynamic shared memory up to `27648`.
+  - `matmul_entry_lhs_bf16_lhs_size_8_rhs_bf16_rhs_size_8_acc_bf16_acc_size_8`: `174` launches, `13.824ms` total, `79.447us` average, max `170` registers/thread, dynamic shared memory up to `14336`.
+  - `lm_head_l2wrap_ce_forward_row_kernel_f__i_i32`: `3` launches, `13.156ms` total, `4385.195us` average, grid `8192x1x1`, block `1024x1x1`, `53` registers/thread.
+  - `lm_head_l2wrap_ce_forward_finalize_kernel_f_` is not in the top list and is not material.
+- Interpretation: the post-projection loss row kernel is a real memory-heavy surface, but the unembed projection belongs to the much larger Cubek matmul surface. Any projection+loss fusion must compete with an already-optimized matmul primitive, not just remove a simple tensor write.
+- Next command: query launch order around the loss row kernels to identify the immediately preceding matmul launches and separate the likely unembed projection from other model matmuls.
+- Launch-order result:
+  - Each loss row launch is immediately preceded by final `layer_norm_forward_kernel_f_`, then one large `matmul_entry_lhs_bf16_lhs_size_1_rhs_bf16_rhs_size_1_acc_bf16_acc_size_8`.
+  - The three immediately preceding matmuls are `15.854ms`, `15.542ms`, and `15.309ms`, with grid `4096x16x1`, block `32x12x1`, `73` registers/thread, and `27648` dynamic shared memory.
+  - The following row-loss launches are `4.246ms`, `4.701ms`, and `4.209ms`.
+- Analysis:
+  - The missing projection is a roughly `15ms`-per-repeat surface, larger than the already-material `4ms` row-loss surface.
+  - A projection+loss fused forward kernel would still need to compute every vocab logit for log-sum-exp. To be competitive it would need a real GEMM-quality tensor-core tiling strategy while also preserving deterministic row reductions.
+  - For training, replacing `unembed.forward(...)` plus `lm_head_l2wrap_ce(...)` would also cross the autograd boundary: backward would need logits/softmax semantics, hidden grad, and unembed weight grad, or would need to save/recompute large intermediates. That is a new operator family, not a scoped tuning candidate.
+- Decision: do not open an implementation branch for projection+loss fusion from this evidence. It is likely too risky for the current tuning pass and could regress the optimized Cubek/TMA projection. The correct next branch is a timing-contract branch that records `lm_head/projection` explicitly so future speedup and profiler decisions include the real lm-head compute boundary.
+- Keep/revert state: no kernel code was changed in this analysis branch. Keep only this note as evidence.

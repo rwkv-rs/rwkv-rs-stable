@@ -1,0 +1,39 @@
+[package]
+name = "rwkv-lm-train"
+authors = ["caizus <18930215187@163.com>"]
+description = "Example: RWKV language model training"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[features]
+default = ["training", "cuda", "ddp"]
+statetune = []
+statepass = []
+f32 = []
+flex32 = []
+f16 = []
+fusion = ["rwkv/fusion"]
+autotune = ["rwkv/autotune"]
+autotune-checks = ["rwkv/autotune-checks"]
+tui = ["rwkv/train-tui"]
+wgpu = ["rwkv/wgpu"]
+vulkan = ["rwkv/vulkan"]
+webgpu = ["rwkv/webgpu"]
+metal = ["rwkv/metal"]
+cuda = ["rwkv/cuda"]
+rocm = ["rwkv/rocm"]
+cpu = ["rwkv/cpu"]
+ddp = ["rwkv/train-collective"]
+training = ["rwkv/train", "rwkv/data", "rwkv/nn", "rwkv/config", "rwkv/train-metrics"]
+
+[dependencies]
+log = { workspace = true }
+sonic-rs = { workspace = true }
+derive-new = { workspace = true }
+rwkv = { path = "../../crates/rwkv", default-features = false }

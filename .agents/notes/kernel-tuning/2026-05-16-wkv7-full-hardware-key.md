@@ -1,0 +1,22 @@
+# WKV7 Full Hardware Key
+
+- Date: 2026-05-16
+- Branch/worktree: `kernel-tuning-wkv7-full-hw-key-20260516` in the existing dirty workspace.
+- Dirty-tree constraint: this checkout carries uncommitted key-design changes from earlier tuning branches. This attempt only edits the WKV7 forward autotune key.
+- Prior-note search command: `rg -n "wkv7|row_tile|Wkv7PretrainOutputAutotuneKey|max_cube_dim|num_tensor_cores|min_tensor_cores_dim|ncu|residual|残差" .agents/notes/kernel-tuning crates/rwkv-nn/src/kernels/train/time_mixer/wkv7`.
+- Matched prior evidence:
+  - `2026-05-16-time-mixer-ncu.md` shows `wkv7_pretrain_forward_output_kernel_f_bf16` under-fills the local GPU, with grid `(12,16,1)`, achieved occupancy around `4.7%`, and duration around `0.50ms`.
+  - `2026-05-16-wkv7-row-tile16-forced.md` shows forcing `row_tile=16` passed correctness but worsened timing; do not repeat that candidate restriction.
+  - Source inspection shows `Wkv7PretrainOutputAutotuneKey` has runtime, dtype, shape, row-tile constraints, and some hardware fields, but lacks `max_cube_dim`, `num_tensor_cores`, and `min_tensor_cores_dim`.
+- Machine/GPU: local CUDA machine, prior ncu reports CC 12.0.
+- Scope: WKV7 pretrain output autotune key.
+- Hypothesis: WKV7 row-tile cache entries should include the same CubeCL hardware fingerprint as LayerNorm, `lm_head_l2wrap_ce`, and the elementwise keys, so cached row-tile choices are not shared across runtimes/devices with different cube or tensor-core capabilities.
+- Candidate parameters: no `row_tile` candidate change; this attempt does not retry row_tile 16.
+- Planned commands: `cargo +nightly fmt --all`; `rtk cargo check -p rwkv-nn --features cuda`.
+- Code change: added `max_cube_dim`, `num_tensor_cores`, and `min_tensor_cores_dim` to `Wkv7PretrainOutputAutotuneKey`, including Display output and key construction from CubeCL hardware properties.
+- Format result: `cargo +nightly fmt --all` passed.
+- Compile result: `rtk cargo check -p rwkv-nn --features cuda` passed.
+- Compare command: `rtk cargo run --release -p rwkv-test --features cuda -- compare-rwkv-nn --color never --repeat 3 --warmup 1`.
+- Correctness result: activation comparison passed (`activation_summary compared=54 passed=54 failed=0`).
+- Timing result: still below total acceptance (`timing_summary compared=76 passed=8 failed=68 ... actual_total_ms=44.873 baseline_total_ms=35.957 speedup=0.80x`). `cells/*/time_mixer` improved to `26.860ms` vs baseline `27.836ms`, `1.04x`, but the total is still held back by `channel_mixer`, pre-layer-norm, `lm_head`, and `loss/l2wrap_cross_entropy`.
+- Decision: keep the key expansion as hardware/shape dispatch correction, but do not claim the total speedup target is met. Future WKV7 performance work should investigate parallelism or launch geometry without repeating the forced `row_tile=16` negative result.

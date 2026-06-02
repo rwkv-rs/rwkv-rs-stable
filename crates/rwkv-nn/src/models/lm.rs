@@ -12,6 +12,8 @@ use crate::{
     modules::time_mixer::param_state::{StateModule, StateModuleConfig},
 };
 
+const DEFAULT_LAYER_NORM_EPSILON: f64 = 1e-5;
+
 /// Configuration for an RWKV language model.
 #[derive(Config, Debug)]
 pub struct RwkvLMConfig {
@@ -141,30 +143,16 @@ impl<B: Backend> RwkvLM<B> {
         B: TrainBackend,
     {
         let embedded_context = self.embed.forward(inputs);
-        let embedded_context_normalized = layer_norm(
-            embedded_context,
-            self.layer_norm_for_first_cell.gamma.val(),
-            self.layer_norm_for_first_cell
-                .beta
-                .as_ref()
-                .expect("rwkv lm layer norm requires affine beta")
-                .val(),
-            1e-5,
-        );
+        let embedded_context_normalized =
+            forward_layer_norm(&self.layer_norm_for_first_cell, embedded_context);
         let multi_causal_cells_output = self.cells.forward(MultiCausalCellsIO {
             embedded_context: embedded_context_normalized,
             state,
             embedded_token_shift_for_channel_mix,
         });
-        let embedded_context_normalized = layer_norm(
+        let embedded_context_normalized = forward_layer_norm(
+            &self.layer_norm_for_unembed,
             multi_causal_cells_output.embedded_context,
-            self.layer_norm_for_unembed.gamma.val(),
-            self.layer_norm_for_unembed
-                .beta
-                .as_ref()
-                .expect("rwkv lm layer norm requires affine beta")
-                .val(),
-            1e-5,
         );
         let logits = self.unembed.forward(embedded_context_normalized);
 
@@ -175,6 +163,22 @@ impl<B: Backend> RwkvLM<B> {
                 .embedded_token_shift_for_channel_mix,
         }
     }
+}
+
+fn forward_layer_norm<B: TrainBackend>(
+    layer_norm_module: &LayerNorm<B>,
+    input: Tensor<B, 3>,
+) -> Tensor<B, 3> {
+    layer_norm(
+        input,
+        layer_norm_module.gamma.val(),
+        layer_norm_module
+            .beta
+            .as_ref()
+            .expect("RWKV layer norm requires affine beta")
+            .val(),
+        DEFAULT_LAYER_NORM_EPSILON,
+    )
 }
 
 /// Output tensors from [`RwkvLM::forward`].

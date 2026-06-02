@@ -1,41 +1,41 @@
 use burn::{
     backend::autodiff::{
+        Autodiff,
         checkpoint::{base::Checkpointer, strategy::CheckpointStrategy},
         grads::Gradients,
         ops::{Backward, Ops, OpsKind},
-        Autodiff,
     },
     tensor::{
-        ops::{FloatTensor, IntTensor},
         DType,
+        ops::{FloatTensor, IntTensor},
     },
 };
 use burn_cubecl::{
-    cubecl::{
-        tune::{anchor, local_tuner, AutotuneKey, LocalTuner, Tunable, TunableSet, TuneGroup},
-        CubeCount,
-        CubeDim,
-    },
-    element::BoolElement,
-    ops::numeric::empty_device,
-    tensor::CubeTensor,
     CubeBackend,
     CubeElement,
     CubeRuntime,
     CubeTuneId,
     FloatElement,
     IntElement,
+    cubecl::{
+        CubeCount,
+        CubeDim,
+        tune::{AutotuneKey, LocalTuner, Tunable, TunableSet, TuneGroup, anchor, local_tuner},
+    },
+    element::BoolElement,
+    ops::numeric::empty_device,
+    tensor::CubeTensor,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::kernels::train::{
-    layout::{assert_linear_readable, CubeHardwareFingerprint},
+    layout::{CubeHardwareFingerprint, assert_linear_readable},
     lm_head_l2wrap_ce::{
+        L2WRAP_FACTOR,
+        LmHeadL2WrapCeBackend,
         forward,
         io::LmHeadL2WrapCePrimitiveInputs,
-        kernel::{lm_head_l2wrap_ce_backward_kernel, LmHeadL2WrapCeInputsLaunch},
-        LmHeadL2WrapCeBackend,
-        L2WRAP_FACTOR,
+        kernel::{LmHeadL2WrapCeInputsLaunch, lm_head_l2wrap_ce_backward_kernel},
     },
 };
 

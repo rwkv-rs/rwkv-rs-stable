@@ -1,0 +1,26 @@
+# Channel Mixer Matmul Fusion Analysis
+
+- Date: 2026-05-16
+- Branch/worktree: `kernel-tuning-channel-mixer-matmul-fusion-analysis-20260516` in the existing dirty workspace.
+- Dirty-tree constraint: this checkout already carries uncommitted kernel, skill, fixture, and crate-structure changes from earlier work. This attempt is source/profiler analysis for the channel mixer matmul boundary and will not change live kernel code until a concrete implementation candidate is identified.
+- Prior-note search command: `rg -n "channel_mixer|channel mixer|matmul|TMA|epilogue|fuse|relu_square|lhs_size_1|rhs_size_1|LocalTuner|bypass|Burn reference|forced Cube|cube-matmul" .agents/notes/kernel-tuning .agents/skills/kernel-tuning/SKILL.md /root/.codex/memories/MEMORY.md`.
+- Matched prior evidence:
+  - `2026-05-16-channel-mixer-ncu.md`: custom mix and ReLU-square kernels are memory-heavy but not the main module bottleneck; both channel mixer matmuls use the TMA `lhs_size_1/rhs_size_1` family at about `230us`.
+  - `2026-05-16-channel-mixer-cube-matmul.md`: forcing `MatmulStrategy::Cube` changed the family to `lhs_size_8/rhs_size_8` and made the matmuls much slower, so this branch must not repeat forced Cube.
+  - `2026-05-16-channel-mixer-tma-matmul-ncu.md`: rebuilt-current ncu shows high SM throughput, low achieved occupancy, low eligible/issued warps per scheduler, high L2 hit, and no spilling for the two TMA matmuls.
+  - `MEMORY.md` records that bypassing `LocalTuner::execute` with direct channel-mixer line-size selection regressed the real compare loop, so this branch must not bypass the tuner without new host-overhead evidence.
+- Machine/GPU: local CUDA machine, prior ncu reports compute capability `12.0`. Remote `10.100.1.253` is still unverified in this attempt.
+- Kernel/stage: CUDA BF16 `rwkv_lm`, `B=16,T=512,D=768`, channel mixer forward matmul boundary `[8192,768]x[768,3072]`, ReLU-square, and `[8192,3072]x[3072,768]`.
+- Hypothesis: the next useful change is likely at the matmul/activation boundary, not elementwise line-size tuning or forced matmul strategy. Inspect Cubek matmul source for epilogue/fusion hooks, TMA vectorization limits, and dispatch keys before proposing a code candidate.
+- Candidate parameters: no live code candidate yet. Source-analysis candidates to classify are Cubek TMA vectorization, matmul epilogue support, strategy dispatch key fields, and whether channel mixer can legally fuse `relu_square` into either matmul boundary.
+- Expected keep/revert boundary: keep only a documented, trace-backed implementation candidate. If source analysis shows no supported epilogue/fusion hook, record that and move to another slow kernel rather than forcing a private fork of Cubek matmul in this workspace.
+
+## Source Findings
+
+- `cubek-matmul-0.2.0-pre.4/src/definition/vectorization.rs` hard-codes TMA input vector sizes to `lhs=1` and `rhs=1`; only output vector size remains selected from the client IO-optimized sizes. Therefore the observed `matmul_entry_lhs_bf16_lhs_size_1_rhs_bf16_rhs_size_1_acc_bf16_acc_size_8` family is expected for TMA and is not by itself a bad vectorization bug.
+- `cubek-matmul-0.2.0-pre.4/src/launch/tune_key.rs` keys ordinary matmul by `m`, `n`, `k`, lhs/rhs stride factors, element storage types, and matrix layouts. For channel mixer this distinguishes `[8192,768]x[768,3072]` from `[8192,3072]x[3072,768]`, but it does not expose a project-level semantic key such as `d_model`, deterministic boundary, or alias state. Those must stay in project-owned kernel keys when the project dispatches custom kernels.
+- `burn-cubecl-0.21.0-pre.4/src/kernel/matmul/tune/base.rs` registers ordinary matmul candidates across naive, unit, accelerated, GEMV, and TMA strategies. TMA is only eligible when lhs/rhs stride alignment permits it, and it was the selected current path for the two channel mixer matmuls.
+- `cubek-matmul-0.2.0-pre.4/src/components/global/write/{base,plane,unit}.rs` exposes generic global writers and event listeners, but no public epilogue hook for applying `relu_square` during matmul output write. A fused activation epilogue would require changing/forking Cubek matmul internals or adding a new upstream-style writer family, which is not a small project-local tuning patch.
+- `burn-cubecl-fusion-0.21.0-pre.4/src/optim/matmul/tune.rs` adds fusion-key anchors for `num_out_buffers` and `num_ops`, but its accelerated fused matmul candidates do not include TMA strategies. This explains why simply routing channel mixer through Burn fusion/reference is a poor candidate: it can save an elementwise launch, but likely gives up the current TMA winner, matching the existing Burn-reference negative result.
+- Decision: do not implement a channel-mixer matmul/activation fusion in this branch. The viable local choices would either repeat the forced-Cube/Burn-reference negatives or require a Cubek matmul extension beyond the current workspace scope. Move the next implementation attempt to another slow group, especially `lm_head_l2wrap_ce` row-kernel memory traffic or a deterministic LayerNorm runtime-dispatch guard.
+- Keep/revert state: no live code change in this branch; keep this analysis note as negative design evidence for channel mixer matmul fusion under the current Burn/Cubek versions.

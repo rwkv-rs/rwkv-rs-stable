@@ -1,6 +1,8 @@
 [package]
 name = "rwkv-derive"
 authors = ["caizus <18930215187@163.com>"]
+categories = ["science", "algorithms", "development-tools::procedural-macro-helpers"]
+keywords = ["rwkv", "llm", "derive", "proc-macro", "config"]
 
 description = "Procedural macros (LineRef, ConfigBuilder) for rwkv-rs configuration and mmap models"
 documentation = "https://docs.rs/rwkv"

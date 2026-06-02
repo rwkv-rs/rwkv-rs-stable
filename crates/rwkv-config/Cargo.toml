@@ -1,6 +1,8 @@
 [package]
 name = "rwkv-config"
 authors = ["caizus <18930215187@163.com>"]
+categories = ["science", "algorithms", "config"]
+keywords = ["rwkv", "llm", "configuration", "deep-learning", "burn"]
 
 description = "Shared configuration schemas, builders, and OnceCell registries for rwkv-rs"
 documentation = "https://docs.rs/rwkv"
@@ -24,8 +26,8 @@ eval = ["dep:once_cell", "dep:rwkv-derive"]
 workspace = true
 
 [dependencies]
-once_cell = { workspace = true, optional = true }
-serde = { workspace = true }
-toml = { workspace = true }
+once_cell = { workspace = true, features = ["std"], optional = true }
+serde = { workspace = true, features = ["derive", "std"] }
+toml = { workspace = true, features = ["parse", "serde"] }
 
 rwkv-derive = { path = "../rwkv-derive", optional = true }

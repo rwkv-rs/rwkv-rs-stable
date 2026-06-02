@@ -1,0 +1,31 @@
+# Local Current Slowrow Audit
+
+- Date: 2026-05-16.
+- Branch/worktree: `kernel-tuning-local-current-slowrow-audit-20260516` in the existing dirty workspace.
+- Dirty-tree constraint: this checkout carries broad unrelated uncommitted changes and prior kernel-tuning notes. This attempt is read-only measurement plus row classification; it will not edit kernel code.
+- Prior-note search command:
+  - `rg -n "channel_mixer|lm_head|l2wrap|LayerNorm|layer_norm|pre_layer_norm|slowrow|speedup|ncu|target-logit|atomic|forced Cube|Burn reference|LocalTuner|residual" .agents/notes/kernel-tuning /root/.codex/memories/MEMORY.md -S`
+- Matched prior evidence:
+  - Channel mixer direct candidates are exhausted for the current scope: forced Cube, Burn/reference fusion, and LocalTuner bypass are negative or out of scope; TMA remains the current matmul winner.
+  - `lm_head_l2wrap_ce` forward target-logit, atomic-loss, and prune-256 attempts passed activation but failed timing; ncu shows the row kernel is dominated by full-vocab scans.
+  - LayerNorm BF16 `D=768` smaller local block candidates drifted, while remote GB10 can safely dispatch to `256` under a narrow hardware/shape key.
+  - Residual-add/Burn-add A/B and residual wiring are recorded duplicate guards; this audit will not rerun residual experiments.
+- Machine/GPU: local CUDA machine unless command output says otherwise.
+- Kernel/stage: CUDA BF16 `rwkv_lm`, current repo state, standard `compare-rwkv-nn` timing rows.
+- Changed boundary: this run follows the skill-trigger enforcement branch and only rebuilds/runs the current dirty tree to produce a current slow-row ranking. It does not introduce a new implementation candidate.
+- Command to run: `cargo run --release -p rwkv-test --features cuda -- compare-rwkv-nn --color never --repeat 3 --warmup 1`.
+- Expected keep/revert boundary: keep this note as measurement evidence. Use the current slow-row ranking to choose a later implementation branch; do not draw ncu-level conclusions from `.time.json` alone.
+- Release build: command rebuilt `target/release/rwkv-test` before running compare.
+- Correctness result: activation passed, `activation_summary compared=54 passed=54 failed=0`.
+- Timing result: command exited non-zero because timing failed, `timing_summary compared=76 passed=9 failed=67 missing=0 extra=0 ignored=0 actual_total_ms=42.339 baseline_total_ms=35.957 speedup=0.85x`.
+- Module timing summary:
+  - `cells/*/time_mixer`: `25.731ms` actual vs `27.836ms` baseline, `1.08x`; not the next local target.
+  - `cells/*/channel_mixer`: `9.268ms` vs `5.527ms`, `0.60x`, largest negative module delta. Existing notes show direct channel-mixer matmul/fusion candidates are exhausted under current Burn/Cubek.
+  - `cells/*/pre_layer_norm_for_time_mix`: `1.780ms` vs `0.495ms`, `0.28x`.
+  - `cells/*/pre_layer_norm_for_channel_mix`: `1.638ms` vs `0.501ms`, `0.31x`.
+  - `cells/*/embedded_context_after_time_mixer`: `1.317ms` vs `0.246ms`, `0.19x`; residual-add experiments are duplicate-guarded.
+  - `cells/*/embedded_context_after_channel_mixer`: `1.001ms` vs `0.249ms`, `0.25x`; residual-add experiments are duplicate-guarded.
+  - `loss/l2wrap_cross_entropy`: `1.046ms` vs `0.717ms`, `0.69x`; previous target-logit, atomic-loss, and prune-256 attempts failed timing.
+  - `embedding`: `0.268ms` vs `0.159ms`, `0.59x`; small absolute delta.
+  - `lm_head`: `0.131ms` vs `0.034ms`, `0.26x`; this trace row is the final LayerNorm timing, not the unembed matmul.
+- Decision: use this as current local slow-row evidence. The next implementation branch should target LayerNorm numerical/performance design, because it has large repeated deltas and the remote/local `256` versus `1024` conflict is already the central hardware/shape dispatch example. Do not repeat channel-mixer forced Cube/Burn fusion, residual-add wiring, or lm-head atomic/target-logit/prune-256 attempts.

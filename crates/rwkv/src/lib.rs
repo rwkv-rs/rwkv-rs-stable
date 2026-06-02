@@ -45,9 +45,3 @@ pub mod nn {
 pub mod train {
     pub use rwkv_train::*;
 }
-
-#[cfg(feature = "infer")]
-/// Inference crate re-exports.
-pub mod infer {
-    pub use rwkv_infer::*;
-}

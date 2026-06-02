@@ -1,0 +1,35 @@
+# WKV7 Remote Launch Design
+
+- Date: 2026-05-16.
+- Branch/worktree: `kernel-tuning-wkv7-remote-launch-design-20260516` in the existing dirty workspace.
+- Dirty-tree constraint: this checkout carries broad unrelated uncommitted workspace changes, the kept gate-wiring code, and the temporary LayerNorm reduction diagnostic. This attempt is scoped to WKV7 forward launch/design evidence plus this note; do not edit unrelated kernels.
+- Prior-note search command:
+  - `rg -n "key_prepare|key prepare|param_key|key_norm|time_mixer/key_prepare|key_prepare.*ncu|key_prepare.*GB10|key_prepare.*speedup" .agents/notes/kernel-tuning /root/.codex/memories/MEMORY.md -S`
+  - Prior context already inspected in this continuation: `2026-05-16-remote-time-mixer-evidence.md`, `2026-05-16-remote-matmul-surface-attribution.md`, `2026-05-16-wire-time-mixer-gates-gb10.md`, and `2026-05-16-local-post-gates-audit.md`.
+- Matched prior evidence:
+  - Gate wiring is the current kept remote high point: remote activation passed and timing fully passed at `actual_total_ms=91.595`, baseline `175.887`, speedup `1.92x`.
+  - After gate wiring, WKV7 output remains a large custom-kernel surface in remote nsys: `wkv7_pretrain_forward_output_kernel_f_bf16` totaled about `22.523ms / 36`.
+  - Prior forced WKV7 `row_tile=16` passed activation but worsened timing; this branch must not repeat a blind row-tile restriction.
+  - Remote ncu is blocked by `ERR_NVGPUCTRPERM`; use nsys launch metadata, source inspection, and standard remote compare for now.
+  - `key_prepare` local ncu showed high memory throughput and no spilling, so do not spend this branch on key_prepare line-size microtuning.
+- Machine/GPU: primary evidence on remote `caizus@10.100.1.253`, `NVIDIA GB10`, compute capability `12.1`; avoid local GPU runs while the user is using the machine.
+- Shape/dtype: CUDA BF16 `rwkv_lm`, `B=16,T=512,D=768`, rows `8192`, heads `12`, head size `64`, regenerated remote baseline under `~/Projects/Packages/rwkv-rs-test/test_gen/rwkv_lm/bf16/case_000000`.
+- Kernel/stage: `time_mixer/wkv7` forward output kernel and its launch geometry after gate wiring.
+- Hypothesis: there may be a WKV7 implementation or dispatch improvement distinct from the rejected forced `row_tile=16`, but this must be proven from source and nsys launch metadata before a code candidate is opened.
+- Candidate parameters: none yet. Inspect current row-tile candidates, selected remote key, grid/block geometry, register/shared-memory metadata, and memory/state traffic.
+- Expected keep/revert boundary: keep this note as evidence. Do not change WKV7 until the source/trace evidence identifies a candidate different from the recorded negative row-tile retry and with a plausible path to increase remote speedup beyond `1.92x` without hurting activation.
+- Next command: inspect WKV7 forward source, kernel launch parameters, and current autotune key/candidate set.
+- Source inspection result: `Wkv7PretrainOutputAutotuneKey` is hardware-rich and the only current candidate parameter is `row_tile`, with candidates `[16, 32, 64]`. The launch uses `CubeCount::Static(num_heads, batch_size, ceil(head_size / row_tile))` and `CubeDim::new_1d(row_tile)`.
+- Kernel-shape result: `wkv7_pretrain_forward_output_kernel` maps one cube to a `(head, batch, row_tile)` group. Each active row owns an `Array<f32>` of `head_size=64` state values, loops serially over `context_len=512`, computes a row-local `state_replacement`, updates the row state, and writes one output value per time step. Larger row tiles reduce repeated shared input loads; smaller row tiles increase cube count but repeat those loads. This matches the old forced `row_tile=16` negative result, so a row-tile-only retry is not justified.
+- Next command: inspect the gate-wiring nsys sqlite for WKV7 launch geometry, register count, and shared-memory metadata after the kept remote `1.92x` change.
+- Artifact inspection result: remote has `target/rwkv-test/nsys-time-mixer-gates-gb10.sqlite` from the kept gate-wiring branch, mtime May 15 18:55, size about `1.2M`. Local only has the older pre-gates remote sqlite and a local post-gates sqlite, so fetch the remote gate-wiring sqlite before querying WKV7.
+- Next command: rsync the existing remote gate-wiring sqlite artifact, then query WKV7 kernel rows locally with Python `sqlite3`.
+- Fetch result: copied remote `target/rwkv-test/nsys-time-mixer-gates-gb10.sqlite` to the local `target/rwkv-test/` directory.
+- Next command: query WKV7 kernel rows for duration, count, grid/block, registers, and shared-memory fields.
+- WKV7 nsys query result: `wkv7_pretrain_forward_output_kernel_f_bf16` launched `36` times, totaling `22.523104ms` (`0.625642ms` average). Launch geometry is `grid=(12,16,1)`, `block=(64,1,1)`, `registersPerThread=127`, static shared memory `0`, dynamic shared memory `1536`.
+- Interpretation: remote selected `row_tile=64`, so each launch has only `12 * 16 = 192` cubes and one cube covers all 64 rows for a `(batch, head)` pair. The high register count is consistent with the per-row `Array<f32>(64)` state. A simple smaller row-tile retry would increase cube count but repeat all shared input loads and already failed locally.
+- Next command: inspect whether the WKV7 input tensors are reused across rows in a way that supports a different split, such as chunk/time partitioning with state handoff, without breaking the recurrence.
+- Recurrence inspection result: `TimeMixer::forward` calls `wkv7_pretrain` with `chunk_len=16`, but the live pretrain output path intentionally calls `wkv7_pretrain_output` rather than the saved-snapshot variant. The output kernel keeps row state in registers for all `512` time steps and avoids snapshot/state-replacement writes. A chunk/time split would require an additional state-handoff or scan-like composition over state transitions; that is a different algorithm with extra memory traffic, not a safe small launch-geometry tweak.
+- Decision: do not open a WKV7 code candidate from this evidence. The current available `row_tile` candidates are already keyed and tuned, `row_tile=16` is a recorded negative, and a real parallel-prefix/state-composition design is too large to implement without a separate algorithm note and trace-backed reference.
+- Follow-up source inspection: `GatedReadout::forward` still uses Burn tensor expressions for `bonus = sum(receptance * replacement_key * bonus_param) * value`, then `out_gated = (group_norm_output + bonus) * gate`, before the output projection matmul. The gate and projection matmuls should stay in Burn/Cubek, but the bonus/out-gated elementwise chain is a possible project-owned fusion boundary.
+- Handoff decision: close this WKV7 branch as evidence-only. Open a fresh branch for a gated-readout combine analysis because it is a different implementation boundary and must account for backward coverage before any forward-only kernel is wired.

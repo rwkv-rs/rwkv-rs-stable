@@ -1,4 +1,4 @@
-use burn_cubecl::{cubecl::ir::HardwareProperties, tensor::CubeTensor, CubeRuntime};
+use burn_cubecl::{CubeRuntime, cubecl::ir::HardwareProperties, tensor::CubeTensor};
 use serde::{Deserialize, Serialize};
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]

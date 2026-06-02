@@ -6,12 +6,14 @@ use burn::{
 };
 
 use crate::{
-    kernels::train::{TrainBackend, layer_norm::layer_norm},
+    kernels::train::{TrainBackend, layer_norm::layer_norm, residual_add::residual_add},
     modules::{
         channel_mixer::{ChannelMixer, ChannelMixerConfig, ChannelMixerIO},
         time_mixer::{TimeMixer, TimeMixerConfig, TimeMixerIO},
     },
 };
+
+const DEFAULT_LAYER_NORM_EPSILON: f64 = 1e-5;
 
 #[derive(Config, Debug)]
 /// Configuration for a stack of causal RWKV cells.
@@ -211,16 +213,8 @@ impl<B: TrainBackend> CausalCell<B> {
     pub fn forward(&self, causal_cell_input: CausalCellIO<B>) -> CausalCellIO<B> {
         let embedded_context = causal_cell_input.embedded_context;
 
-        let embedded_context_normalized = layer_norm(
-            embedded_context.clone(),
-            self.pre_layer_norm_for_time_mix.gamma.val(),
-            self.pre_layer_norm_for_time_mix
-                .beta
-                .as_ref()
-                .expect("rwkv causal cell layer norm requires affine beta")
-                .val(),
-            1e-5,
-        );
+        let embedded_context_normalized =
+            forward_layer_norm(&self.pre_layer_norm_for_time_mix, embedded_context.clone());
         let time_mixer_input = TimeMixerIO {
             embedded_context: embedded_context_normalized,
             value_from_first_cell: causal_cell_input.value_from_first_cell.clone(),
@@ -229,17 +223,11 @@ impl<B: TrainBackend> CausalCell<B> {
 
         let time_mixer_output = self.time_mixer.forward(time_mixer_input);
 
-        let embedded_context = embedded_context + time_mixer_output.embedded_context;
+        let embedded_context = residual_add(embedded_context, time_mixer_output.embedded_context);
 
-        let embedded_context_normalized = layer_norm(
+        let embedded_context_normalized = forward_layer_norm(
+            &self.pre_layer_norm_for_channel_mix,
             embedded_context.clone(),
-            self.pre_layer_norm_for_channel_mix.gamma.val(),
-            self.pre_layer_norm_for_channel_mix
-                .beta
-                .as_ref()
-                .expect("rwkv causal cell layer norm requires affine beta")
-                .val(),
-            1e-5,
         );
 
         let channel_mixer_input = ChannelMixerIO {
@@ -249,7 +237,8 @@ impl<B: TrainBackend> CausalCell<B> {
 
         let channel_mixer_output = self.channel_mixer.forward(channel_mixer_input);
 
-        let embedded_context = embedded_context + channel_mixer_output.embedded_context;
+        let embedded_context =
+            residual_add(embedded_context, channel_mixer_output.embedded_context);
 
         CausalCellIO {
             embedded_context,
@@ -258,6 +247,22 @@ impl<B: TrainBackend> CausalCell<B> {
             embedded_token_shift_for_channel_mix: channel_mixer_output.embedded_token_shift,
         }
     }
+}
+
+fn forward_layer_norm<B: TrainBackend>(
+    layer_norm_module: &LayerNorm<B>,
+    input: Tensor<B, 3>,
+) -> Tensor<B, 3> {
+    layer_norm(
+        input,
+        layer_norm_module.gamma.val(),
+        layer_norm_module
+            .beta
+            .as_ref()
+            .expect("RWKV layer norm requires affine beta")
+            .val(),
+        DEFAULT_LAYER_NORM_EPSILON,
+    )
 }
 
 /// Input and output tensors for one [`CausalCell`].

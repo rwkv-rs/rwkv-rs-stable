@@ -1,6 +1,8 @@
 [package]
 name = "rwkv-data"
 authors = ["caizus <18930215187@163.com>"]
+categories = ["science", "algorithms", "text-processing", "encoding"]
+keywords = ["rwkv", "llm", "dataset", "tokenizer", "mmap"]
 description = "Memory-mapped dataset readers, tokenizers, and samplers for RWKV training pipelines"
 
 rust-version = "1.95"
@@ -55,16 +57,16 @@ rayon = { workspace = true }
 futures = { workspace = true }
 
 # === Data Structures ===
-once_cell = { workspace = true }
+once_cell = { workspace = true, features = ["std"] }
 dashmap = { workspace = true }
 xxhash-rust = { workspace = true, features = ["xxh3"] }
-bytemuck = { workspace = true }
+bytemuck = { workspace = true, features = ["derive"] }
 
 # === File ===
 memmap2 = { workspace = true }
 
 # === Serialization ===
-serde = { workspace = true }
+serde = { workspace = true, features = ["derive", "std"] }
 sonic-rs = { workspace = true }
 csv-async = { workspace = true, features = ["tokio", "with_serde"] }
 parquet = { workspace = true }
@@ -78,7 +80,7 @@ rwkv-config = { path = "../rwkv-config", default-features = false, features = ["
 
 [dev-dependencies]
 # === Unitest & Bench ===
-criterion = { workspace = true }
+criterion = { workspace = true, features = ["cargo_bench_support"] }
 
 # === File ===
 tempfile = { workspace = true }

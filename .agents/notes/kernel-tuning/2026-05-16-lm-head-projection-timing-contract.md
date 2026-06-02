@@ -1,0 +1,46 @@
+# Lm Head Projection Timing Contract
+
+- Date: 2026-05-16
+- Branch/worktree: `kernel-tuning-lm-head-projection-timing-contract-20260516` in the existing dirty local checkout.
+- Dirty-tree constraint: this checkout inherits broad unrelated workspace changes and prior tuning notes. This branch is scoped to `crates/rwkv-test/src/rwkv_nn_trace/writer.rs`, optional focused timing tests, and this note.
+- Prior-note/source search command:
+  - `rg -n "lm_head/projection|lm_head/logits|lm_head/embedded_context|is_canonical_timing_module|ignored" crates/rwkv-test/src .agents/notes/kernel-tuning -S`
+- Matched prior evidence:
+  - `2026-05-16-lm-head-projection-timing-boundary.md` proves `lm_head.time.json` records only final LayerNorm and excludes `model.unembed.forward(...)`.
+  - `2026-05-16-lm-head-projection-loss-fusion-analysis.md` shows remote `nsys` has a roughly `15ms` unembed projection immediately before each roughly `4ms` row-loss launch.
+  - `crates/rwkv-test/src/timing.rs` filters timing rows through `is_canonical_timing_module`; noncanonical rows are counted as ignored, so a new diagnostic row can be emitted without breaking old baselines.
+- Machine/GPU: source change locally; primary validation on remote `caizus@10.100.1.253`, NVIDIA GB10, if a compare run is needed. Do not use the local GPU.
+- Shape/dtype: CUDA BF16 `rwkv_lm`, `B=16,T=512,D=768`, vocab `65536`, rows `8192`.
+- Kernel/stage: `lm_head/projection`, the unembed `Linear` projection from hidden `[8192,768]` to logits `[8192,65536]`.
+- Changed boundary: this is a timing-contract fix, not a kernel implementation change. It records projection timing separately from final LayerNorm and post-projection loss.
+- Hypothesis: emitting `timing/lm_head/projection.time.json` will expose the missing lm-head projection surface for analysis while preserving current compare compatibility by leaving the row noncanonical until the regenerated baseline contract includes it.
+- Candidate parameters: none.
+- Expected keep/revert boundary: keep if `cargo test -p rwkv-test timing --features cuda` or a narrower non-GPU test target passes, `cargo check -p rwkv-test --features cuda` passes, and a remote compare either passes with `ignored` increased by one or is not run because this branch is trace-writer-only. Revert if the row becomes canonical against old baselines or changes tensor outputs.
+- Code change:
+  - Added `TraceWriter::trace_float_timing(...)`, a timing-only helper that returns the tensor but does not write a safetensors output.
+  - Wrapped `model.unembed.forward(embedded_context)` as module `lm_head/projection` with name `lm_head projection`.
+  - Deliberately did not write `lm_head/logits.safetensors`, because this training trace path should not materialize the 1GB logits payload as an output fixture just to expose timing.
+- Next command: add a focused timing test proving `lm_head/projection` is currently noncanonical/ignored against old baselines.
+- Test change: updated `compare_timing_uses_only_canonical_compute_rows` to include `actual`-only `lm_head/projection` and expect it in the ignored count.
+- Next command: run nightly rustfmt on `crates/rwkv-test/src/rwkv_nn_trace/writer.rs` and `crates/rwkv-test/src/timing/tests.rs`, then run focused timing tests and CUDA compile check for `rwkv-test`.
+- Local validation:
+  - `rustup run nightly rustfmt crates/rwkv-test/src/rwkv_nn_trace/writer.rs crates/rwkv-test/src/timing/tests.rs` passed.
+  - `cargo test -p rwkv-test timing --features cuda` passed: 6 timing tests passed.
+  - `cargo check -p rwkv-test --features cuda` passed.
+- Next command: sync only `crates/rwkv-test/src/rwkv_nn_trace/writer.rs`, `crates/rwkv-test/src/timing/tests.rs`, and this note to `10.100.1.253`, then run remote `cargo check -p rwkv-test --features cuda`.
+- Remote sync result: scoped rsync of the two touched `rwkv-test` files and this note to `/home/caizus/Projects/Packages/rwkv-rs-stable` completed.
+- Remote compile gate: `cargo check -p rwkv-test --features cuda` passed on `10.100.1.253`.
+- Next command: run standard remote compare with existing regenerated baseline to verify the new `lm_head/projection` row is ignored, not treated as a missing-baseline canonical failure.
+- Remote compare result:
+  - Command: `cargo run --release -p rwkv-test --features cuda -- compare-rwkv-nn --color never --baseline ~/Projects/Packages/rwkv-rs-test/test_gen/rwkv_lm/bf16/case_000000 --repeat 3 --warmup 1`.
+  - Exit code was nonzero because canonical timing still has the known narrow `timing/cells/cell_0000/channel_mixer.time.json` edge failure (`1.685ms` actual vs `1.668ms` baseline, `0.99x`).
+  - Activation passed: `activation_summary compared=54 passed=54 failed=0`.
+  - Timing contract check passed: `missing=0 extra=0 ignored=1`, so the new projection row did not break old baseline comparison.
+  - Total canonical timing stayed strongly above remote acceptance: `actual_total_ms=85.431`, `baseline_total_ms=175.887`, speedup `2.06x`.
+- Next command: inspect the generated remote `timing/lm_head/projection.time.json` file to record the actual projection timing row.
+- Projection timing artifact:
+  - Remote actual file: `target/rwkv-test/rwkv_nn_actual/rwkv_lm/bf16/case_000000/timing/lm_head/projection.time.json`.
+  - Record: `elapsed_ns=15895415`, `repeat=3`, `warmup=1`, samples `[16547049,15118745,16020451]`.
+  - This matches the `nsys` launch-order attribution where the unembed projection was about `15ms` per repeat.
+- Decision: keep this timing-contract change. It exposes the real lm-head projection surface without writing logits and without breaking comparison against the existing regenerated baseline. A later baseline-contract branch can make `lm_head/projection` canonical after the baseline generator emits the same row.
+- Keep/revert state: keep `crates/rwkv-test/src/rwkv_nn_trace/writer.rs` and `crates/rwkv-test/src/timing/tests.rs` changes.

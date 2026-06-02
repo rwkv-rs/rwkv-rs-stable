@@ -1,0 +1,22 @@
+# LM Head Forward Prune 256 Candidate
+
+- Date: 2026-05-16.
+- Branch/worktree: `kernel-tuning-lm-head-forward-prune-256-20260516` in the existing dirty workspace.
+- Dirty-tree constraint: this checkout already carries accumulated kernel, skill, fixture, and crate-structure changes from earlier tuning work. This attempt is scoped to `crates/rwkv-nn/src/kernels/train/lm_head_l2wrap_ce/forward.rs`.
+- Prior-note search command: `rg -n "lm_head_l2wrap_ce|forward row|block_256|block_512|block_1024|AutotuneKey|LocalTuner|target-logit|atomic" .agents/notes/kernel-tuning crates/rwkv-nn/src/kernels/train/lm_head_l2wrap_ce -S`.
+- Matched prior evidence:
+  - `2026-05-16-lm-head-forward-target-logit.md` removed the target-logit reduction and did not improve timing, so this branch does not touch the row math.
+  - `2026-05-16-lm-head-forward-atomic-loss.md` removed the finalize launch via an atomic-loss candidate but remained timing-negative and nondeterministic under the deterministic key, so this branch does not repeat that design.
+  - `2026-05-16-forward-current-ncu-after-keys.md` captured the current loss row candidates after key fixes: block `256` was about `1258.2us`, while block `512` was about `714.5us` on the same local CC 12.0 BF16 `rows=8192,vocab=65536` run; both had high DRAM throughput and no spilling.
+  - `2026-05-16-cubecl-local-tuner-findings.md` says a single valid tunable fast-path avoids candidate benchmarking, and cache misses profile all candidates before selecting a winner.
+- Machine/GPU: local CUDA machine, ncu reports CC `12.0`.
+- Kernel/stage: CUDA BF16 `lm_head_l2wrap_ce` forward, shape `B=16,T=512,rows=8192,vocab=65536`.
+- Hypothesis: for large deterministic BF16 full-vocab loss on hardware that supports at least 512 units per cube, `256` is a dominated candidate. Filtering it before `LocalTuner` avoids expensive miss-time profiling and prevents stale/slow `256` wins, while still letting `512` and `1024` compete by hardware and shape.
+- Candidate parameters: keep `BLOCK_SIZE_CANDIDATES = [256,512,1024]`, add a keyed `min_block_size`, and reject candidates below that value in the tunable group.
+- Expected keep/revert boundary: keep only if `cargo check -p rwkv-nn --features cuda` passes, activation remains `54/54 PASS`, and standard `repeat=3,warmup=1` timing improves or at least does not regress. Revert if activation drifts or loss timing does not improve.
+- Code change: added `min_block_size` to `LmHeadL2WrapCeForwardAutotuneKey`; for BF16 `vocab_size >= 65536`, `num_tokens >= 8192`, and `max_units_per_cube >= 512`, candidates below `512` are rejected by the `block_size` tunable group. Other shapes keep the `256` minimum.
+- Compile result: `rustup run nightly rustfmt crates/rwkv-nn/src/kernels/train/lm_head_l2wrap_ce/forward.rs` passed; `cargo check -p rwkv-nn --features cuda` passed.
+- Compare command: `cargo run --release -p rwkv-test --features cuda -- compare-rwkv-nn --color never --repeat 3 --warmup 1`.
+- Compare result: activation stayed valid (`activation_summary compared=54 passed=54 failed=0`), but timing did not meet the keep boundary: `timing_summary compared=76 passed=8 failed=68 ... actual_total_ms=45.284 baseline_total_ms=35.957 speedup=0.79x`. `loss/l2wrap_cross_entropy` remained slow at `1.055ms` vs `0.717ms` (`0.68x`), and `lm_head` was `0.121ms` vs `0.034ms` (`0.28x`).
+- Decision before revert: reject this implementation. Pruning `256` from the large BF16 forward candidate set is not enough to improve the real standard compare run, and the total result regressed versus the current key-design baseline. Revert only this branch's `min_block_size` code while keeping the note as negative evidence.
+- Keep/revert state: reverted the live `min_block_size` code from `forward.rs`; the note keeps the failed attempt. Revert validation: `rustup run nightly rustfmt crates/rwkv-nn/src/kernels/train/lm_head_l2wrap_ce/forward.rs` passed, `cargo check -p rwkv-nn --features cuda` passed, and `rg -n "min_block_size|minblock" crates/rwkv-nn/src/kernels/train/lm_head_l2wrap_ce/forward.rs .agents/notes/kernel-tuning/2026-05-16-lm-head-forward-prune-256.md` now finds only this note, not live kernel code.

@@ -3,14 +3,22 @@ mod forward;
 pub mod io;
 mod kernel;
 
-use burn::tensor::{ops::FloatTensor, Tensor, TensorPrimitive};
+use burn::{
+    backend::autodiff::{Autodiff, checkpoint::strategy::CheckpointStrategy},
+    prelude::Backend,
+    tensor::{
+        Tensor,
+        TensorPrimitive,
+        ops::{FloatTensor, ModuleOps},
+    },
+};
 use burn_cubecl::{
-    element::BoolElement,
     CubeBackend,
     CubeElement,
     CubeRuntime,
     FloatElement,
     IntElement,
+    element::BoolElement,
 };
 
 use crate::kernels::train::{
@@ -37,6 +45,21 @@ where
         assert_linear_readable("beta", &inputs.beta);
 
         forward::fused_layer_norm::<R, F, I, BT>(inputs)
+    }
+}
+
+impl<B, C> LayerNormBackend for Autodiff<B, C>
+where
+    B: Backend,
+    C: CheckpointStrategy,
+{
+    fn fused_layer_norm(inputs: LayerNormPrimitiveInputs<Self>) -> FloatTensor<Self> {
+        Self::layer_norm(
+            inputs.input,
+            inputs.gamma,
+            Some(inputs.beta),
+            inputs.epsilon,
+        )
     }
 }
 

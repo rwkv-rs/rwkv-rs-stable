@@ -236,6 +236,79 @@ where
     }
 }
 
+#[cfg(feature = "fusion")]
+mod fusion_impl {
+    use burn::tensor::Element;
+    use burn_fusion::{
+        Fusion,
+        FusionBackend,
+        FusionRuntime,
+        stream::{Operation, OperationStreams},
+    };
+    use burn_ir::{CustomOpIr, HandleContainer, OperationIr, TensorIr};
+
+    use super::*;
+    use crate::kernels::train::residual_add::ResidualAddBackend;
+
+    impl<B: FusionBackend + ResidualAddBackend> ResidualAddBackend for Fusion<B> {
+        fn fused_residual_add(inputs: ResidualAddPrimitiveInputs<Self>) -> FloatTensor<Self> {
+            let ResidualAddPrimitiveInputs { lhs, rhs } = inputs;
+            let client = lhs.client.clone();
+            let shape = lhs.shape.clone();
+
+            #[derive(Clone, Debug)]
+            struct ResidualAddOp<B1> {
+                desc: CustomOpIr,
+                _backend: core::marker::PhantomData<B1>,
+            }
+
+            impl<B1: FusionBackend + ResidualAddBackend> Operation<B1::FusionRuntime> for ResidualAddOp<B1> {
+                fn execute(
+                    &self,
+                    handles: &mut HandleContainer<
+                        <B1::FusionRuntime as FusionRuntime>::FusionHandle,
+                    >,
+                ) {
+                    let ([lhs, rhs], [output_out]) = self.desc.as_fixed();
+
+                    let output = B1::fused_residual_add(ResidualAddPrimitiveInputs {
+                        lhs: handles.get_float_tensor::<B1>(lhs),
+                        rhs: handles.get_float_tensor::<B1>(rhs),
+                    });
+
+                    handles.register_float_tensor::<B1>(&output_out.id, output);
+                }
+            }
+
+            let mut streams = OperationStreams::default();
+            streams.tensor(&lhs);
+            streams.tensor(&rhs);
+
+            let output_desc = [TensorIr::uninit(
+                client.create_empty_handle(),
+                shape,
+                B::FloatElem::dtype(),
+            )];
+
+            let desc = CustomOpIr::new(
+                "fused_residual_add",
+                &[lhs.into_ir(), rhs.into_ir()],
+                &output_desc,
+            );
+
+            let op = ResidualAddOp::<B> {
+                desc,
+                _backend: core::marker::PhantomData,
+            };
+
+            client
+                .register(streams, OperationIr::Custom(op.desc.clone()), op)
+                .pop()
+                .expect("missing fused_residual_add output")
+        }
+    }
+}
+
 fn max_line_size_many<R: CubeRuntime>(tensors: &[&CubeTensor<R>], axis: usize) -> usize {
     tensors
         .iter()

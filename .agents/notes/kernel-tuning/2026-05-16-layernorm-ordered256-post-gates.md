@@ -1,0 +1,35 @@
+# LayerNorm Ordered-256 Post Gates
+
+- Date: 2026-05-16.
+- Branch/worktree: `kernel-tuning-layernorm-ordered256-post-gates-20260516` in the existing dirty workspace.
+- Dirty-tree constraint: this checkout carries broad unrelated uncommitted workspace changes plus the kept TimeMixer gate wiring. This attempt is scoped to `crates/rwkv-nn/src/kernels/train/layer_norm/{forward.rs,kernel.rs}` and this note.
+- Prior-note search command:
+  - `rg -n "layer_norm|LayerNorm|ordered256|ordered-256|block_256_d768_ordered|BLOCK_SIZE|drift|value_from_first_cell|embedded_context|post-gates|gate wiring|GB10|remote" .agents/notes/kernel-tuning .agents/skills/kernel-tuning/SKILL.md /root/.codex/memories/MEMORY.md -S`
+- Matched prior evidence:
+  - Ordinary local BF16 `D=768` block `256`, `512`, and `768` candidates caused downstream activation drift; this branch must not admit those unchanged candidates locally.
+  - `2026-05-16-layernorm-d768-ordered256.md` showed an ordered-256 numerical candidate passed local activation and improved local total from `0.85x` to `0.88x`, but it was reverted because remote-first acceptance did not improve over the then-current remote LayerNorm dispatch.
+  - `2026-05-16-wire-time-mixer-gates-gb10.md` changed the surrounding implementation boundary: TimeMixer gate wiring now passes remote at `1.92x` and the local TimeMixer aggregate is over baseline, while local total remains `0.77x`.
+  - `2026-05-16-local-post-gates-audit.md` shows local post-gates LayerNorm is still a real CUDA surface (`layer_norm_forward_kernel_f_` about `6.915ms / 91`) and identifies this as the lowest-risk non-duplicate implementation branch.
+- Machine/GPU: local CUDA machine, BF16 trace fixture. Remote GB10 validation is required only if local activation and timing improve.
+- Shape/dtype: CUDA BF16 `rwkv_lm`, `B=16,T=512,D=768`, rows `8192`.
+- Kernel/stage: LayerNorm forward.
+- Changed boundary: this is not a repeat of ordinary block-size-only LayerNorm. It reintroduces the ordered-256 numerical algorithm only under the new post-gates tree, and only when the deterministic policy already excludes ordinary `256` locally.
+- Hypothesis: a `D=768` ordered-256 candidate can recover local LayerNorm time without reopening the activation drift seen from ordinary `256`. Combined with the kept gate wiring, it may move local total closer to the `>1.0x` target while preserving the remote GB10 ordinary-256 policy.
+- Candidate parameters: add `block_256_d768_ordered` with `block_size=256`, `num_warps=8`, valid for BF16 `D=768`, `rows=8192`, deterministic `true`, and `deterministic_min_block_size > 256`. Ordinary candidates remain unchanged.
+- Expected keep/revert boundary: keep only if `cargo check -p rwkv-nn --features cuda` passes, local activation remains `54/54 PASS`, and standard local timing improves versus the current post-gates `0.77x` without making remote GB10 worse after sync. If activation drifts or local timing regresses, revert the code and keep this note as negative evidence.
+- Next command: edit `layer_norm/forward.rs` and `layer_norm/kernel.rs` to add the ordered-256 candidate and kernel, then run rustfmt and `cargo check -p rwkv-nn --features cuda`.
+- Code change: added `layer_norm_d768_ordered256_forward_kernel` and a `block_256_d768_ordered` tunable. The new candidate is valid only for deterministic BF16 `D=768`, rows `8192`, `max_units_per_cube >= 256`, and `deterministic_min_block_size > 256`, so it does not compete on the verified GB10 ordinary-256 key.
+- Next command: `rustup run nightly rustfmt crates/rwkv-nn/src/kernels/train/layer_norm/forward.rs crates/rwkv-nn/src/kernels/train/layer_norm/kernel.rs`, then `cargo check -p rwkv-nn --features cuda`.
+- Formatting and compile result: rustfmt passed, and `cargo check -p rwkv-nn --features cuda` passed.
+- Next command: run standard local compare for activation and timing: `cargo run --release -p rwkv-test --features cuda -- compare-rwkv-nn --color never --repeat 3 --warmup 1`.
+- Local compare result: reject. Timing improved versus the current post-gates state (`timing_summary compared=76 passed=14 failed=62 actual_total_ms=41.501 baseline_total_ms=35.957 speedup=0.87x` vs `0.77x`), and `cells/*/time_mixer` improved to `1.15x`, but activation failed (`activation_summary compared=54 passed=52 failed=2`). The failures are `cells/cell_0000/time_mixer/value_from_first_cell.safetensors` (`max_abs=1.171875e-1`) and `lm_head/embedded_context.safetensors` (`max_abs=1.562500e-1`), matching the LayerNorm drift family that this rule is supposed to prevent.
+- Decision before revert: reject and revert the ordered-256 code. Do not sync to remote because local activation already failed.
+- Next command: revert only this branch's `layer_norm/forward.rs` and `layer_norm/kernel.rs` changes, then run rustfmt and `cargo check -p rwkv-nn --features cuda`.
+- Revert validation: removed the ordered-256 candidate and kernel from `layer_norm/forward.rs` and `layer_norm/kernel.rs`. Rustfmt passed, and `cargo check -p rwkv-nn --features cuda` passed.
+- Cache caveat: the failed compare may have appended an ordered-256 entry to the local `target/autotune` LayerNorm cache. Before any later local compare, inspect or clear only the LayerNorm forward autotune cache so a removed candidate cannot contaminate the reverted boundary.
+- Cache inspection result: `target/autotune/0.10.0/device-0-0-cuda/rwkv_nn-kernels-train-layer_norm-forward-layer-norm-forward.json.log` contains `block_256_d768_ordered` with `fastest_index=6` for the local BF16 `D=768` key. This cache entry is stale after the code revert.
+- Next command: move only that generated LayerNorm forward autotune cache aside to `target/autotune/0.10.0/device-0-0-cuda/rwkv_nn-kernels-train-layer_norm-forward-layer-norm-forward.json.log.rejected-ordered256-20260516` before any further local compare.
+- Cache cleanup result: moved the generated LayerNorm forward cache aside as planned.
+- Next command: rerun standard local compare on the reverted code/cache boundary: `cargo run --release -p rwkv-test --features cuda -- compare-rwkv-nn --color never --repeat 3 --warmup 1`.
+- Reverted local compare result: activation recovered (`activation_summary compared=54 passed=54 failed=0`). Timing remains below local acceptance but improved versus the pre-clean post-gates run (`timing_summary compared=76 passed=12 failed=64 actual_total_ms=41.111 baseline_total_ms=35.957 speedup=0.87x`). `cells/*/time_mixer` is now `24.186ms` vs `27.836ms`, `1.15x`; remaining blockers are still `cells/*/channel_mixer` `0.59x`, residual timing rows around `0.19x`, pre-layer-norm rows around `0.28x-0.30x`, `lm_head` `0.24x`, and `loss/l2wrap_cross_entropy` `0.68x`.
+- Final decision: keep ordered-256 reverted. Keep the cache cleanup and note. The current live code remains the gate-wiring branch plus existing LayerNorm runtime dispatch, with no ordered-256 source symbol left under `crates/rwkv-nn/src/kernels/train/layer_norm`.

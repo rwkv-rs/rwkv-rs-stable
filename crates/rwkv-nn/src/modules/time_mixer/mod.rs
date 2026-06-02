@@ -13,6 +13,7 @@ use crate::{
         learning_rate_gate::LearningRateGateBackend,
         mix6::{Mix6Backend, mix6},
         value_residual_gate::ValueResidualGateBackend,
+        weight_decay_transform::WeightDecayTransformBackend,
         wkv7::{
             Wkv7Backend,
             io::{Wkv7StatepassForwardInputs, Wkv7StatetuneForwardInputs},
@@ -166,7 +167,7 @@ impl<B: Backend> TimeMixer<B> {
             + LearningRateGateBackend
             + Mix6Backend
             + ValueResidualGateBackend
-            + crate::kernels::train::time_mixer::weight_decay_transform::WeightDecayTransformBackend
+            + WeightDecayTransformBackend
             + Wkv7Backend,
     {
         let TimeMixerIO {
@@ -236,7 +237,7 @@ impl<B: Backend> TimeMixer<B> {
             + LearningRateGateBackend
             + Mix6Backend
             + ValueResidualGateBackend
-            + crate::kernels::train::time_mixer::weight_decay_transform::WeightDecayTransformBackend
+            + WeightDecayTransformBackend
             + Wkv7Backend,
     {
         let TimeMixerIO {

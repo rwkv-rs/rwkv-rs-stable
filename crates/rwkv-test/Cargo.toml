@@ -13,7 +13,12 @@ harness = false
 
 [features]
 default = []
-cuda = ["burn/cuda", "rwkv-nn/cuda"]
+cuda = [
+    "burn/cuda",
+    "burn/autotune",
+    "rwkv-nn/cuda",
+    "rwkv-nn/autotune",
+]
 cpu = ["burn/cpu", "rwkv-nn/cpu"]
 
 [dependencies]

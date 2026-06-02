@@ -1,20 +1,20 @@
-use burn::tensor::{ops::FloatTensor, DType};
+use burn::tensor::{DType, ops::FloatTensor};
 use burn_cubecl::{
-    cubecl::{
-        calculate_cube_count_elemwise,
-        prelude::*,
-        tensor_vector_size_parallel,
-        tune::{anchor, local_tuner, AutotuneKey, LocalTuner, Tunable, TunableSet, TuneGroup},
-    },
-    element::BoolElement,
-    ops::numeric::empty_device,
-    tensor::CubeTensor,
     CubeBackend,
     CubeElement,
     CubeRuntime,
     CubeTuneId,
     FloatElement,
     IntElement,
+    cubecl::{
+        calculate_cube_count_elemwise,
+        prelude::*,
+        tensor_vector_size_parallel,
+        tune::{AutotuneKey, LocalTuner, Tunable, TunableSet, TuneGroup, anchor, local_tuner},
+    },
+    element::BoolElement,
+    ops::numeric::empty_device,
+    tensor::CubeTensor,
 };
 use serde::{Deserialize, Serialize};
 
@@ -147,10 +147,10 @@ pub(crate) fn fused_learning_rate_gate<
 mod fusion_impl {
     use burn::tensor::{Element, Shape};
     use burn_fusion::{
-        stream::{Operation, OperationStreams},
         Fusion,
         FusionBackend,
         FusionRuntime,
+        stream::{Operation, OperationStreams},
     };
     use burn_ir::{CustomOpIr, HandleContainer, OperationIr, TensorIr};
 

@@ -1,0 +1,24 @@
+# LayerNorm Safe-Path Analysis
+
+- Date: 2026-05-16
+- Branch/worktree: `kernel-tuning-layernorm-safe-path-analysis-20260516` in the existing dirty workspace.
+- Prior-note search command: `rg -n "layer_norm|LayerNorm|BLOCK_SIZE|pre_layer_norm|value_from_first_cell|embedded_context|residual|残差|ncu|speedup|0\\.83|1\\.49" .agents/notes/kernel-tuning .agents/skills/kernel-tuning/SKILL.md /root/.codex/memories/MEMORY.md`.
+- Matched prior evidence:
+  - Local BF16 `D=768` block `512` and `768` attempts failed activation with `value_from_first_cell` and `lm_head/embedded_context` drift.
+  - Remote `10.100.1.253` evidence says block `256` can pass and speed up that regenerated-baseline workflow, but memory also records that the remote pass does not imply local correctness.
+  - Current hardware-key policy kept local deterministic exclusion of `256`, `512`, and `768`, passed activation, but total timing was still `0.83x`; `layer_norm0` itself was `1.49x` while per-cell pre-layer-norm rows remained slow.
+  - ncu on the accepted 1024 path showed block `(1024,1,1)`, grid `(8192,1,1)`, achieved occupancy around `63%`, theoretical occupancy `66.67%`, and register/warp occupancy limits rather than pure memory saturation.
+- Scope: CUDA BF16 `rwkv_lm`, `B=16,T=512,D=768`, local safe LayerNorm forward path.
+- Hypothesis: the next useful step is to inspect the safe `1024` implementation and its call sites to find a deterministic reduction or launch/dispatch issue. Do not retry block-size-only `256`, `512`, or `768` on this branch.
+- Planned commands: source inspection first, then `rtk cargo check -p rwkv-nn --features cuda` after any code change, followed by `rtk cargo run --release -p rwkv-test --features cuda -- compare-rwkv-nn --color never --repeat 3 --warmup 1` and, if needed, focused `rtk ncu` on `layer_norm`.
+- Code change: merged the `sum` and `squares` block reductions inside `layer_norm_forward_kernel` so the local safe path does one shared-memory cross-warp reduction pass for both values instead of calling the two-sync reduction helper twice. This keeps the same per-value warp-reduction order and does not change the block-size policy.
+- Compile result: first `rtk cargo check -p rwkv-nn --features cuda` failed because the direct shared-memory writes required `let mut shared`; after the fix, the same command passed.
+- Compare command: `rtk cargo run --release -p rwkv-test --features cuda -- compare-rwkv-nn --color never --repeat 3 --warmup 1`.
+- Compare result: activation stayed valid (`activation_summary compared=54 passed=54 failed=0`), but timing regressed to `actual_total_ms=44.465`, baseline `35.957`, speedup `0.81x`. `layer_norm0` was `0.247ms` vs baseline `0.194ms`, `0.78x`, and per-cell pre-layer-norm totals stayed slow (`pre_layer_norm_for_time_mix` `0.28x`, `pre_layer_norm_for_channel_mix` `0.32x`).
+- Interim interpretation: correctness survived, but combining the reductions likely increased instruction pressure, register pressure, shared-memory traffic, or scheduling cost enough to outweigh the two removed `sync_cube()` calls. Run focused ncu before deciding keep/revert.
+- ncu command: `rtk ncu --target-processes all --kernel-name regex:'.*layer_norm.*' --launch-count 30 --section SpeedOfLight --section Occupancy --section MemoryWorkloadAnalysis --section SchedulerStats --section WarpStateStats --csv --log-file target/rwkv-test/ncu-layernorm-combined-reduction.csv target/release/rwkv-test compare-rwkv-nn --color never --repeat 1 --warmup 1`.
+- ncu result: profiler timing rows are invalid because of repeat/profile mismatch and instrumentation overhead, but the CSV suggests the combined-reduction kernel itself was faster than the previous ncu capture: mean kernel duration around `74.3us` versus prior `84.1us`, no local/shared spilling, achieved occupancy around `62.6%` versus prior `63.3%`, shared-memory block limit worsened from `7` to `6`, and scheduler eligibility remained low at about `0.93` eligible warps per scheduler.
+- Confirming compare command: reran `rtk cargo run --release -p rwkv-test --features cuda -- compare-rwkv-nn --color never --repeat 3 --warmup 1` on unchanged code.
+- Confirming compare result: activation still passed, but timing was worse (`actual_total_ms=45.395`, baseline `35.957`, speedup `0.79x`). `layer_norm0` recovered to `1.21x`, still below the previous hardware-policy note's `1.49x`; per-cell pre-layer-norm totals stayed around `0.28x`.
+- Decision: negative end-to-end result. Reverted the kernel code back to the original two separate reductions, but keep this branch and note as evidence that reducing syncs can improve the isolated ncu duration while failing to improve the trace timing boundary.
+- Revert validation: `rtk cargo check -p rwkv-nn --features cuda` passed after restoring the original reduction structure.

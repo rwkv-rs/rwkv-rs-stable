@@ -3,7 +3,11 @@ mod forward;
 pub mod io;
 mod kernel;
 
-use burn::tensor::{Tensor, TensorPrimitive, ops::FloatTensor};
+use burn::{
+    backend::autodiff::{Autodiff, checkpoint::strategy::CheckpointStrategy},
+    prelude::Backend,
+    tensor::{Tensor, TensorPrimitive, ops::FloatTensor},
+};
 use burn_cubecl::{
     CubeBackend,
     CubeElement,
@@ -36,6 +40,19 @@ where
         assert_linear_readable("rhs", &inputs.rhs);
 
         forward::fused_residual_add::<R, F, I, BT>(inputs)
+    }
+}
+
+impl<B, C> ResidualAddBackend for Autodiff<B, C>
+where
+    B: Backend,
+    C: CheckpointStrategy,
+{
+    fn fused_residual_add(inputs: ResidualAddPrimitiveInputs<Self>) -> FloatTensor<Self> {
+        let lhs = Tensor::<Self, 3>::from_primitive(TensorPrimitive::Float(inputs.lhs));
+        let rhs = Tensor::<Self, 3>::from_primitive(TensorPrimitive::Float(inputs.rhs));
+
+        (lhs + rhs).into_primitive().tensor()
     }
 }
 

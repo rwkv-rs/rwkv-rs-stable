@@ -1,0 +1,25 @@
+# Channel Mixer TMA Matmul ncu
+
+- Date: 2026-05-16.
+- Branch/worktree: `kernel-tuning-channel-mixer-tma-matmul-ncu-20260516` in the existing dirty workspace.
+- Dirty-tree constraint: this checkout already carries uncommitted kernel, skill, fixture, and crate-structure changes from earlier work. This attempt is read-only profiling for `channel_mixer` forward matmuls.
+- Prior-note search command: `rg -n "channel_mixer|matmul|TMA|forced Cube|LocalTuner|bypass|ncu|lhs_size_1|rhs_size_1" .agents/notes/kernel-tuning .agents/skills/kernel-tuning/SKILL.md /root/.codex/memories/MEMORY.md`.
+- Matched prior evidence:
+  - `2026-05-16-channel-mixer-ncu.md`: custom mix and ReLU-square kernels are not the module bottleneck; both channel mixer matmuls use `matmul_entry_lhs_bf16_lhs_size_1_rhs_bf16_rhs_size_1_acc_bf16_acc_size_8` at about `230us` each.
+  - `2026-05-16-channel-mixer-cube-matmul.md`: forcing `MatmulStrategy::Cube` changed the family to `lhs_size_8/rhs_size_8` but made the matmuls much slower; do not repeat forced Cube.
+  - `2026-05-16-forward-slowgroup-current-ncu.md`: current slow group still shows the TMA matmul family at about `229us`, with SM throughput high and achieved occupancy around `20%`.
+  - `2026-05-16-skill-guardrails.md` and `MEMORY.md`: bypassing `LocalTuner::execute` regressed the real compare loop; do not bypass the tuner without new host-overhead evidence.
+- Machine/GPU: local CUDA machine, prior ncu reports compute capability `12.0`. Remote `10.100.1.252` refused SSH and `10.100.1.253` rejected current SSH credentials in the previous check.
+- Kernel/stage: CUDA BF16 `rwkv_lm`, `B=16,T=512,D=768`, channel mixer forward matmuls for shapes `[8192,768]x[768,3072]` and `[8192,3072]x[3072,768]`.
+- Hypothesis: the current TMA matmul path may already be the fastest available Burn/Cubek strategy for these shapes, so the next implementation should be chosen from deeper metrics: scheduler stalls, warp execution, memory hierarchy, and whether the surrounding activation/write traffic is the real fusion target.
+- Candidate parameters: no code candidate in this branch; capture current autotuned TMA matmul with `SpeedOfLight`, `Occupancy`, `MemoryWorkloadAnalysis`, `SchedulerStats`, `WarpStateStats`, `LaunchStats`, and `ComputeWorkloadAnalysis`.
+- Invalid first command: `rtk ncu --target-processes all --kernel-name regex:'.*matmul_entry_lhs_bf16_lhs_size_1_rhs_bf16_rhs_size_1_acc_bf16_acc_size_8.*' --launch-count 36 --section SpeedOfLight --section Occupancy --section MemoryWorkloadAnalysis --section SchedulerStats --section WarpStateStats --section LaunchStats --section ComputeWorkloadAnalysis --csv --log-file target/rwkv-test/ncu-channel-mixer-tma-matmul-current.csv target/release/rwkv-test compare-rwkv-nn --color never --repeat 1 --warmup 1`.
+- Invalid first-run result: discard. It ran a stale `target/release/rwkv-test` binary from the previous split-tail LayerNorm experiment and reproduced the split-tail activation drift (`52/54 PASS`, `value_from_first_cell` and `lm_head/embedded_context` failed). Rebuild the release binary before collecting evidence for this branch.
+- Release rebuild command: `rtk cargo build --release -p rwkv-test --features cuda`.
+- Current-binary sanity command: `target/release/rwkv-test compare-rwkv-nn --color never --repeat 3 --warmup 1`.
+- Current-binary sanity result: activation returned to valid current live code, `activation_summary compared=54 passed=54 failed=0`. Timing remains below target, `timing_summary compared=76 passed=8 failed=68 ... actual_total_ms=45.022 baseline_total_ms=35.957 speedup=0.80x`.
+- Command: pending ncu rerun after release rebuild.
+- Correctness result: current live binary sanity passed activation before ncu.
+- Timing/profiler result: pending ncu rerun after release rebuild.
+- Decision: pending.
+- Keep/revert state: no code change planned.

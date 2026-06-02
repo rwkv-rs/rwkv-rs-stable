@@ -8,14 +8,14 @@
 )))]
 mod fallback {
     use burn::{
-        backend::autodiff::{checkpoint::strategy::CheckpointStrategy, Autodiff},
-        tensor::{ops::FloatTensor, Tensor, TensorPrimitive},
+        backend::autodiff::{Autodiff, checkpoint::strategy::CheckpointStrategy},
+        tensor::{Tensor, TensorPrimitive, ops::FloatTensor},
     };
 
     use crate::kernels::train::time_mixer::mix6::{
+        Mix6Backend,
         io::{Mix6ForwardInputs, Mix6ForwardPrimitiveInputs, Mix6ForwardPrimitiveOutput},
         mix6_reference,
-        Mix6Backend,
     };
 
     impl<B, C> Mix6Backend for Autodiff<B, C>
@@ -69,68 +69,68 @@ mod fallback {
 mod cube_impl {
     use burn::{
         backend::autodiff::{
+            Autodiff,
             checkpoint::{base::Checkpointer, strategy::CheckpointStrategy},
             grads::Gradients,
             ops::{Backward, Ops, OpsKind},
-            Autodiff,
         },
         tensor::{
-            ops::{FloatTensor, FloatTensorOps},
             Shape,
             Slice,
             Tensor,
             TensorMetadata,
             TensorPrimitive,
+            ops::{FloatTensor, FloatTensorOps},
         },
     };
     use burn_cubecl::{
-        cubecl::{
-            calculate_cube_count_elemwise,
-            prelude::*,
-            tensor_vector_size_parallel,
-            tune::{
-                anchor,
-                local_tuner,
-                AutotuneKey,
-                AutotuneOutput,
-                LocalTuner,
-                Tunable,
-                TunableSet,
-                TuneGroup,
-            },
-            CubeCount,
-            CubeDim,
-        },
-        element::BoolElement,
-        ops::numeric::{empty_device, zeros_client},
-        tensor::CubeTensor,
         CubeBackend,
         CubeElement,
         CubeRuntime,
         CubeTuneId,
         FloatElement,
         IntElement,
+        cubecl::{
+            CubeCount,
+            CubeDim,
+            calculate_cube_count_elemwise,
+            prelude::*,
+            tensor_vector_size_parallel,
+            tune::{
+                AutotuneKey,
+                AutotuneOutput,
+                LocalTuner,
+                Tunable,
+                TunableSet,
+                TuneGroup,
+                anchor,
+                local_tuner,
+            },
+        },
+        element::BoolElement,
+        ops::numeric::{empty_device, zeros_client},
+        tensor::CubeTensor,
     };
     use serde::{Deserialize, Serialize};
 
     use crate::kernels::train::{
-        layout::{assert_linear_readable, CubeHardwareFingerprint},
+        layout::{CubeHardwareFingerprint, assert_linear_readable},
         time_mixer::mix6::{
+            Mix6Backend,
+            Mix6StackedBackend,
             io::{Mix6ForwardInputs, Mix6ForwardPrimitiveInputs, Mix6ForwardPrimitiveOutput},
             kernel::{
-                mix6_backward_finalize_kernel,
-                mix6_backward_partial_kernel,
-                mix6_stacked_forward_kernel,
                 Mix6BackwardFinalizeInputsLaunch,
                 Mix6BackwardFinalizeOutputsLaunch,
                 Mix6BackwardInputsLaunch,
                 Mix6BackwardOutputsLaunch,
                 Mix6ForwardInputsLaunch,
                 Mix6StackedForwardOutputLaunch,
+                mix6_backward_finalize_kernel,
+                mix6_backward_partial_kernel,
+                mix6_stacked_forward_kernel,
             },
             mix6_reference,
-            Mix6Backend,
-            Mix6StackedBackend,
         },
     };
 
@@ -222,8 +222,15 @@ mod cube_impl {
             grads: &mut Gradients,
             _checkpointer: &mut Checkpointer,
         ) {
-            let [node_embedded_context, node_receptance_scale, node_weight_decay_scale, node_key_scale, node_value_scale, node_learning_rate_scale, node_gate_scale] =
-                ops.parents;
+            let [
+                node_embedded_context,
+                node_receptance_scale,
+                node_weight_decay_scale,
+                node_key_scale,
+                node_value_scale,
+                node_learning_rate_scale,
+                node_gate_scale,
+            ] = ops.parents;
             let output_grad = grads.consume::<CubeBackend<R, F, I, BT>>(&ops.node);
             let grads_out = mix6_backward::<R, F, I, BT>(output_grad, ops.state);
 

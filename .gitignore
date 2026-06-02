@@ -28,4 +28,6 @@ reference_for_agents/
 # Repo-specific data / logs
 logs/
 data/
+!crates/rwkv-train/src/data/
+!crates/rwkv-train/src/data/**
 weights/

@@ -1,0 +1,88 @@
+# Backward Autotune Key Hardware Fingerprint Sweep
+
+- Date: 2026-05-16.
+- Branch/worktree: `kernel-tuning-backward-keys-hardware-fingerprint-sweep-20260516` in the existing dirty local checkout.
+- Dirty-tree constraint: this checkout carries broad unrelated workspace edits and prior kernel-tuning work. This attempt owns only backward autotune key structure changes in `crates/rwkv-nn/src/kernels/train/**/backward.rs`, the already introduced `CubeHardwareFingerprint` helper, and this note.
+- User constraint: use remote `10.100.1.253` for GPU validation; do not use local GPU timing.
+- Prior-note/source search:
+  - `rg -n "backward.*hardware fingerprint|BackwardAutotuneKey|load_width|plane_size|max_units_per_cube|CubeHardwareFingerprint" .agents/notes/kernel-tuning crates/rwkv-nn/src/kernels/train -S`
+  - `git status --short --branch`
+- Matched evidence:
+  - `2026-05-16-backward-autotune-hardware-key.md` already expanded backward keys with runtime, shape, hardware capability fields, vector-width limit, alias state, and deterministic flags.
+  - The new `CubeHardwareFingerprint` helper has been validated for LayerNorm and forward-key sweeps on remote GB10.
+  - Current backward key structs still hand-copy the public CubeCL hardware fields; this branch changes representation only.
+- Changed boundary:
+  - Convert existing backward autotune keys that already carry repeated hardware fields to `hardware: CubeHardwareFingerprint`.
+  - Keep candidate names, candidate sets, kernel launch shapes, math, shape anchors, `is_in_place`, and deterministic flags unchanged.
+  - Do not touch residual, forward keys, or new kernel algorithms in this branch.
+- Machine/GPU for runtime validation: remote `caizus@10.100.1.253`, host `spark-35ac`, NVIDIA GB10.
+- Shape/dtype target: `rwkv_lm` BF16, `B=16`, `T=512`, `d_model=768`, `rows=8192`, R9 projection baseline case under `/home/caizus/Projects/Packages/rwkv-rs-test/test_gen_projection_r9_20260516/rwkv_lm/bf16/case_000000`.
+- Expected keep/revert boundary:
+  - Keep if local and remote compile checks pass and remote compare preserves activation while total speedup stays above `1.0`.
+  - Revert if any candidate validity changes, any backward key loses a hardware discriminator, activation drifts, or compare shows a new timing regression attributable to this key structure change.
+- Next edit: update only backward autotune key structs and their key construction/use sites to use `CubeHardwareFingerprint`.
+- Code change:
+  - Updated `lm_head_l2wrap_ce/backward.rs`, `channel_mixer/backward.rs`, `learning_rate_gate/backward.rs`, `value_residual_gate/backward.rs`, and `mix6/backward.rs` to store `hardware: CubeHardwareFingerprint` instead of duplicated CubeCL hardware fields.
+  - Updated candidate validity checks from `key.max_units_per_cube` to `key.hardware.max_units_per_cube`.
+  - Kept candidate names, candidate loops, launch parameters, tensor alias flags, deterministic flags, and math unchanged.
+- Next command: rustfmt the touched backward files and then run the local compile gate without local GPU timing.
+- Formatting:
+  - `rtk rustup run nightly rustfmt crates/rwkv-nn/src/kernels/train/lm_head_l2wrap_ce/backward.rs crates/rwkv-nn/src/kernels/train/channel_mixer/backward.rs crates/rwkv-nn/src/kernels/train/time_mixer/learning_rate_gate/backward.rs crates/rwkv-nn/src/kernels/train/time_mixer/value_residual_gate/backward.rs crates/rwkv-nn/src/kernels/train/time_mixer/mix6/backward.rs`
+  - Result: passed.
+- Next command: local `cargo check -p rwkv-nn --features cuda`.
+- Local compile:
+  - `rtk cargo check -p rwkv-nn --features cuda`
+  - Result: passed (`Finished dev profile` in 10.66s).
+- Next command: inspect the scoped diff for the five touched backward files before remote sync.
+- Diff/grep inspection:
+  - `rtk git diff -- crates/rwkv-nn/src/kernels/train/lm_head_l2wrap_ce/backward.rs crates/rwkv-nn/src/kernels/train/channel_mixer/backward.rs crates/rwkv-nn/src/kernels/train/time_mixer/learning_rate_gate/backward.rs crates/rwkv-nn/src/kernels/train/time_mixer/value_residual_gate/backward.rs crates/rwkv-nn/src/kernels/train/time_mixer/mix6/backward.rs`
+  - Result: showed the scoped backward-file diff; because this branch inherits broad prior edits, the tracked-file diff includes older math/layout changes in the same files. Current edit intent remains limited to key construction/struct/display/use-site changes.
+  - Invalid grep: `rtk rg -n "load_width: hardware|plane_size: hardware|max_units_per_cube: hardware|key\\.max_units_per_cube|load{}:p{}:u{}" ...` failed because `{}` was parsed as a regex repetition.
+- Next command: rerun the grep with fixed patterns.
+- Fixed grep:
+  - `rtk rg -n -e "load_width: hardware" -e "plane_size: hardware" -e "max_units_per_cube: hardware" -e "key\\\\.max_units_per_cube" -e "load\\\\{\\\\}:p\\\\{\\\\}:u\\\\{\\\\}" ...`
+  - Result: no matches, so the targeted backward files no longer hand-copy those hardware fields or read `key.max_units_per_cube` directly.
+- Next command: scoped rsync of the five backward files, the shared `layout.rs` helper, and this note to `caizus@10.100.1.253:/home/caizus/Projects/Packages/rwkv-rs-stable`.
+- Remote sync:
+  - `rtk rsync -avR ... caizus@10.100.1.253:/home/caizus/Projects/Packages/rwkv-rs-stable/`
+  - Result: failed with `Permission denied (publickey,password)`.
+- Next command: inspect local SSH configuration for the correct remote alias/key before retrying.
+- SSH inspection:
+  - `rtk ls -la ~/.ssh` showed `id_ed25519_dgx_spark_windows`.
+  - `rtk sed -n '1,220p' ~/.ssh/config` failed because no local SSH config file exists.
+  - `rtk rg -n "10\\.100\\.1\\.253|spark-35ac|caizus|rwkv-rs-stable" ...` found prior successful notes using `ssh -i ~/.ssh/id_ed25519_dgx_spark_windows -o BatchMode=yes caizus@10.100.1.253`.
+- Next command: retry scoped rsync with the explicit `id_ed25519_dgx_spark_windows` identity.
+- Remote sync retry:
+  - `rtk rsync -azR -e 'ssh -i ~/.ssh/id_ed25519_dgx_spark_windows -o BatchMode=yes -o ConnectTimeout=10' ... caizus@10.100.1.253:/home/caizus/Projects/Packages/rwkv-rs-stable/`
+  - Result: passed; remote shell emitted only `[TRACE zshenv]`.
+- Next command: remote compile gate `cargo check -p rwkv-nn --features cuda` in `/home/caizus/Projects/Packages/rwkv-rs-stable`.
+- Remote compile:
+  - Host/path: `caizus@10.100.1.253:/home/caizus/Projects/Packages/rwkv-rs-stable`.
+  - `cargo check -p rwkv-nn --features cuda`
+  - Result: passed in 1.48s.
+- Next command: remote R9 compare with `--repeat 9 --warmup 3` against `/home/caizus/Projects/Packages/rwkv-rs-test/test_gen_projection_r9_20260516/rwkv_lm/bf16/case_000000`.
+- Remote R9 compare:
+  - Host/path: `caizus@10.100.1.253:/home/caizus/Projects/Packages/rwkv-rs-stable`.
+  - Command: `cargo run --release -p rwkv-test --features cuda -- compare-rwkv-nn --color never --repeat 9 --warmup 3 --baseline /home/caizus/Projects/Packages/rwkv-rs-test/test_gen_projection_r9_20260516/rwkv_lm/bf16/case_000000`.
+  - Result: process exited `1` because the known `lm_head/projection.time.json` row is still slightly below baseline. Release rebuild completed in 2m31s. Activation passed (`compared=54 passed=54 failed=0`). Timing tail shows `compared=77 passed=76 failed=1`, with module totals still above `1.0`; full line was truncated in the terminal tail.
+  - Key row from tail: `lm_head/projection` `15.433ms` actual vs `15.158ms` baseline (`0.98x`), matching the prior known R9 projection caveat rather than a backward-key-specific regression.
+- Next command: extract exact `activation_summary`, `timing_summary`, and module totals from the remote log.
+- Remote log extraction:
+  - `grep -E "^(activation_summary|timing_summary|module|cells/\\*/|embedding|layer_norm0|lm_head|lm_head/projection|loss/l2wrap_cross_entropy|FAIL[[:space:]]+timing/lm_head/projection)" target/rwkv-test/remote-backward-keys-hardware-fingerprint-r9-compare.log`
+  - Result: activation summary confirmed `compared=54 passed=54 failed=0`. Module totals: channel mixer `1.16x`, residual rows `2.19x`/`2.30x`, LayerNorm rows `2.55x`/`2.69x` plus layer_norm0 `2.90x`, time_mixer `1.67x`, loss `1.35x`; only `lm_head/projection` failed at `15.433ms` vs `15.158ms` (`0.98x`). The program still ellipsized the full `timing_summary` line in the log.
+- Next command: compute total actual/baseline speedup from the `timing_by_module` rows in the remote log.
+- Module total calculation:
+  - `awk '/^(cells\\/\\*|embedding|layer_norm0|lm_head|lm_head\\/projection|loss\\/l2wrap_cross_entropy)/ { actual += $3; baseline += $4 } END { ... }' target/rwkv-test/remote-backward-keys-hardware-fingerprint-r9-compare.log`
+  - Result: `module_sum_actual_ms=88.816 module_sum_baseline_ms=130.485 module_sum_speedup=1.47x`.
+- Decision:
+  - Keep the backward-key representation change. Compile passed locally and remotely, remote activation passed, and total/module speed remains above `1.0`.
+  - The compare command exit code is explained by the pre-existing R9 `lm_head/projection` caveat (`0.98x`) and is not attributable to this backward-key-only change.
+  - This branch does not prove backward runtime speed because the standard `compare-rwkv-nn` acceptance path is forward steady-state. A future backward-performance attempt needs a dedicated trace/bench boundary before making timing claims about these keys.
+- Next command: sync this updated note back to the remote mirror.
+- Remote note sync:
+  - `rtk rsync -azR -e 'ssh -i ~/.ssh/id_ed25519_dgx_spark_windows -o BatchMode=yes -o ConnectTimeout=10' .agents/notes/kernel-tuning/2026-05-16-backward-keys-hardware-fingerprint-sweep.md caizus@10.100.1.253:/home/caizus/Projects/Packages/rwkv-rs-stable/`
+  - Result: passed; remote shell emitted only `[TRACE zshenv]`.
+- Final note sync retry:
+  - Same scoped note sync command after adding the decision block.
+  - Result: passed; remote shell emitted only `[TRACE zshenv]`.
+- Final state: local note includes the final sync result. No further kernel command is needed for this branch.

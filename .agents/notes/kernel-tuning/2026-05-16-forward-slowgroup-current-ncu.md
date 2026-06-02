@@ -1,0 +1,28 @@
+# Forward Slow Group Current ncu
+
+- Date: 2026-05-16
+- Branch/worktree: `kernel-tuning-forward-slowgroup-ncu-20260516` in the existing dirty workspace.
+- Dirty-tree constraint: this profile runs on the accumulated key-design tree after backward/forward/WKV7 hardware-key expansions.
+- Prior-note search command: `rg -n "channel_mixer|layer_norm|lm_head|l2wrap|ncu|SpeedOfLight|Occupancy|MemoryWorkloadAnalysis|target-logit|cube-matmul|safe-path" .agents/notes/kernel-tuning`.
+- Matched prior evidence:
+  - `2026-05-16-local-ncu-forward-slow-kernels.md` captured LayerNorm and loss kernels before the full key-design sweep.
+  - `2026-05-16-channel-mixer-ncu.md` showed channel mixer elementwise kernels were memory-heavy but not the full module bottleneck; the two channel mixer matmuls were likely more important.
+  - `2026-05-16-channel-mixer-cube-matmul.md` showed forcing non-autotune Cube matmul was slower, so this run must not repeat that change.
+  - `2026-05-16-lm-head-forward-target-logit.md` showed direct target-logit loading did not improve the memory-bound loss row kernel.
+- Machine/GPU: local CUDA machine, prior ncu reports CC 12.0.
+- Scope: current forward steady-state slow groups after key-design changes: `channel_mixer`, `layer_norm`, `lm_head`, and `l2wrap_cross_entropy`.
+- Command: `rtk ncu --target-processes all --kernel-name regex:'.*(channel_mixer|layer_norm|lm_head|l2wrap|matmul).*' --launch-count 80 --section SpeedOfLight --section Occupancy --section MemoryWorkloadAnalysis --section SchedulerStats --section WarpStateStats --csv --log-file target/rwkv-test/ncu-forward-slowgroup-current.csv target/release/rwkv-test compare-rwkv-nn --color never --repeat 1 --warmup 1`.
+- Profiler caveat: compare timing under ncu is invalid; use the CSV for kernel metrics.
+- Output file: `target/rwkv-test/ncu-forward-slowgroup-current.csv`.
+- First ncu result:
+  - `layer_norm_forward_kernel_f_`: block `(1024,1,1)`, grid `(8192,1,1)`, median duration about `84.1us`, memory and SM throughput about `32.6%`, DRAM about `17%`, achieved occupancy about `63.2%`, theoretical occupancy `66.7%`, eligible warps per scheduler about `0.85`, no local/shared spilling. This remains latency/eligibility limited rather than DRAM-saturated.
+  - `matmul_entry_lhs_bf16_lhs_size_1_rhs_bf16_rhs_size_1_acc_bf16_acc_size_8`: block `(32,8,1)`, grid `(384,2,1)`, median duration about `229.3us`, memory throughput about `65%`, SM throughput about `87%`, achieved occupancy about `19.6%`, L2 hit about `95%`, no spilling. This matches the prior channel mixer matmul diagnosis; do not repeat the forced Cube matmul attempt.
+  - `channel_mixer_relu_square_forward_kernel_f__n_8`: median duration about `52.9us`, DRAM/memory throughput about `83%`, achieved occupancy about `75.5%`, no spilling. This remains memory-bound elementwise work.
+  - `channel_mixer_mix_forward_kernel_f__n_2`: median duration about `16.9us`, DRAM/memory throughput about `77%`, achieved occupancy about `76%`, no spilling. This is not the main channel mixer target.
+- Loss-only command: `rtk ncu --target-processes all --kernel-name regex:'.*(lm_head|l2wrap).*' --launch-count 16 --section SpeedOfLight --section Occupancy --section MemoryWorkloadAnalysis --section SchedulerStats --section WarpStateStats --csv --log-file target/rwkv-test/ncu-forward-loss-current.csv target/release/rwkv-test compare-rwkv-nn --color never --repeat 1 --warmup 1`.
+- Loss-only output file: `target/rwkv-test/ncu-forward-loss-current.csv`.
+- Loss-only ncu result:
+  - `lm_head_l2wrap_ce_forward_row_kernel_f__i_i32`: block `(1024,1,1)`, grid `(8192,1,1)`, median duration about `718.2us`, memory/DRAM throughput about `87.4%`, SM throughput about `41.1%`, achieved occupancy about `66.2%`, theoretical occupancy `66.7%`, active threads per warp about `32`, no spilling. The tuner now selects block `1024`; the row kernel remains bandwidth-bound over the full vocab scan.
+  - `lm_head_l2wrap_ce_forward_finalize_kernel_f_`: block `(256,1,1)`, grid `(1,1,1)`, median duration about `13.3us`; still not the loss bottleneck.
+- Correctness result under profiler: activation comparison still passed (`activation_summary compared=54 passed=54 failed=0`) for both profiled runs.
+- Decision: no code change on this branch. The next implementation attempt should target either reducing the loss row kernel's full-vocab memory traffic or changing channel mixer matmul/fusion at a higher level. LayerNorm block-size-only retries remain blocked by existing local BF16 drift evidence.

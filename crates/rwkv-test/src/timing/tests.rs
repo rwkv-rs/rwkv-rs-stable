@@ -18,6 +18,7 @@ fn compare_timing_uses_only_canonical_compute_rows() {
     write_time(&actual, "embedding/token_ids", 1);
     write_time(&baseline, "embedding/token_ids", 1);
     write_time(&baseline, "loss/l2wrap_cross_entropy/lse", 300);
+    write_time(&actual, "lm_head/projection", 50);
 
     let comparison = compare_timing(
         &scan_timing(&actual).unwrap(),
@@ -28,7 +29,7 @@ fn compare_timing_uses_only_canonical_compute_rows() {
     assert_eq!(comparison.compared, 2);
     assert_eq!(comparison.missing, 0);
     assert_eq!(comparison.extra, 0);
-    assert_eq!(comparison.ignored, 2);
+    assert_eq!(comparison.ignored, 3);
     assert_eq!(
         comparison
             .rows
@@ -48,6 +49,40 @@ fn compare_timing_uses_only_canonical_compute_rows() {
         [
             ("cells/*/time_mixer".to_owned(), 10, 40,),
             ("loss/l2wrap_cross_entropy".to_owned(), 5, 10),
+        ],
+    );
+}
+
+#[test]
+fn compare_timing_compares_optional_projection_when_both_sides_have_it() {
+    let temp = tempdir().unwrap();
+    let actual = temp.path().join("actual");
+    let baseline = temp.path().join("baseline");
+
+    write_time(&actual, "lm_head", 10);
+    write_time(&baseline, "lm_head", 20);
+    write_time(&actual, "lm_head/projection", 50);
+    write_time(&baseline, "lm_head/projection", 100);
+
+    let comparison = compare_timing(
+        &scan_timing(&actual).unwrap(),
+        &scan_timing(&baseline).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(comparison.compared, 2);
+    assert_eq!(comparison.missing, 0);
+    assert_eq!(comparison.extra, 0);
+    assert_eq!(comparison.ignored, 0);
+    assert_eq!(
+        comparison
+            .rows
+            .iter()
+            .map(|row| (row.path.as_str(), row.status, row.speedup))
+            .collect::<Vec<_>>(),
+        [
+            ("timing/lm_head.time.json", "PASS", Some(2.0)),
+            ("timing/lm_head/projection.time.json", "PASS", Some(2.0)),
         ],
     );
 }
@@ -123,6 +158,29 @@ fn compare_timing_does_not_report_speedup_for_cold_profile() {
     assert_eq!(comparison.rows[0].status, "PASS");
     assert_eq!(comparison.rows[0].speedup, None);
     assert!(comparison.rows[0].reason.contains("cold/debug"));
+}
+
+#[test]
+fn compare_timing_fails_when_actual_is_slower_than_baseline() {
+    let temp = tempdir().unwrap();
+    let actual = temp.path().join("actual");
+    let baseline = temp.path().join("baseline");
+
+    write_time(&actual, "embedding", 20);
+    write_time(&baseline, "embedding", 10);
+
+    let comparison = compare_timing(
+        &scan_timing(&actual).unwrap(),
+        &scan_timing(&baseline).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(comparison.rows[0].status, "FAIL");
+    assert_eq!(comparison.rows[0].speedup, Some(0.5));
+    assert_eq!(
+        comparison.rows[0].reason,
+        "actual timing is slower than baseline"
+    );
 }
 
 #[test]

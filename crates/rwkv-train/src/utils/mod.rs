@@ -1,0 +1,125 @@
+//! Training file-system utilities for checkpoints and record discovery.
+
+use std::{
+    fs::{create_dir_all, read_dir},
+    path::{Path, PathBuf},
+};
+
+use burn::tensor::backend::AutodiffBackend;
+use burn_store::{BurnpackStore, ModuleSnapshot};
+use dialoguer::Confirm;
+use regex::Regex;
+
+/// Creates a directory when it does not exist and returns the same path.
+///
+/// # Panics
+///
+/// Panics if the directory cannot be created.
+pub fn auto_create_directory(path: PathBuf) -> PathBuf {
+    if !path.exists() {
+        create_dir_all(&path).unwrap();
+    }
+
+    path
+}
+
+/// Resolves the record file to load for an experiment.
+///
+/// When `record_path` is provided, this function canonicalizes it and asks for
+/// confirmation if a newer record exists in the experiment `records` directory.
+/// When `record_path` is `None`, it returns the newest `E{mini_epoch}S{step}.bpk`
+/// record in that directory.
+///
+/// # Panics
+///
+/// Panics if the records directory cannot be created or read, if the provided
+/// record path cannot be canonicalized, if user confirmation cannot be read, or
+/// if the user rejects loading the explicitly selected older record.
+pub fn read_record_file(
+    record_path: Option<String>,
+    full_experiment_log_path: &Path,
+) -> Option<String> {
+    let full_records_dir_path = auto_create_directory(full_experiment_log_path.join("records"));
+
+    match &record_path {
+        Some(record_path) => {
+            let full_record_path = PathBuf::from(record_path).canonicalize().unwrap();
+
+            if full_record_path.starts_with(&full_records_dir_path)
+                && let Some(full_last_record_path) = find_last_record_path(&full_records_dir_path)
+                && full_record_path != full_last_record_path
+            {
+                let prompt = format!(
+                    "⚠️ 你指定了 {}，但 record 目录下最新的是 {}。\n若想自动加载最新，请留空 \
+                     record_path；\n确认继续加载指定文件？",
+                    full_record_path.display(),
+                    full_last_record_path.display(),
+                );
+
+                if !Confirm::new()
+                    .with_prompt(prompt)
+                    .default(false)
+                    .interact()
+                    .expect("读取用户输入失败")
+                {
+                    panic!("用户取消，程序终止");
+                }
+            }
+
+            Some(full_record_path.to_string_lossy().to_string())
+        }
+        None => find_last_record_path(&full_records_dir_path)
+            .map(|last_record_path| last_record_path.to_string_lossy().to_string()),
+    }
+}
+
+fn find_last_record_path(full_records_dir_path: &Path) -> Option<PathBuf> {
+    let re = Regex::new(r"^E(\d+)S(\d+)\.bpk$").unwrap();
+
+    read_dir(full_records_dir_path)
+        .unwrap()
+        .flatten()
+        .filter_map(|entry| {
+            let os_name = entry.file_name();
+
+            let name = os_name.to_string_lossy();
+
+            re.captures(&name).map(|cap| {
+                let miniepoch: usize = cap[1].parse::<usize>().unwrap();
+
+                let step: usize = cap[2].parse::<usize>().unwrap();
+
+                ((miniepoch, step), entry.path().canonicalize().unwrap())
+            })
+        })
+        .max_by_key(|((miniepoch, step), _)| (*miniepoch, *step))
+        .map(|(_, path)| {
+            println!("🔄 自动加载最新权重: {}", path.display());
+
+            path
+        })
+}
+
+/// Saves model weights into the experiment `records` directory.
+///
+/// The output file is named `E{mini_epoch}S{step}.bpk`.
+///
+/// # Panics
+///
+/// Panics if the records directory cannot be created or if the model snapshot
+/// cannot be written.
+pub fn save_model_weights<B: AutodiffBackend, M: ModuleSnapshot<B>>(
+    model: &M,
+    full_experiment_log_path: &Path,
+    mini_epoch: usize,
+    step: usize,
+) {
+    let full_records_dir_path = auto_create_directory(full_experiment_log_path.join("records"));
+
+    let filename = format!("E{}S{}.bpk", mini_epoch, step);
+
+    let save_path = full_records_dir_path.join(filename);
+
+    let mut store = BurnpackStore::from_file(&save_path);
+    model.save_into(&mut store).unwrap();
+}

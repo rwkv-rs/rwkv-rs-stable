@@ -1,0 +1,32 @@
+# CubeCL LocalTuner Findings
+
+- Date: 2026-05-16
+- Branch/worktree: `kernel-tuning-wkv7-row-tile16-forced-20260516` in the existing dirty workspace.
+- Scope: Burn/CubeCL autotune mechanism review for train-kernel dispatch design.
+- Sources inspected:
+  - `/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cubecl-runtime-0.10.0/src/tune/local.rs`
+  - `/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cubecl-runtime-0.10.0/src/tune/tuner.rs`
+  - `/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cubecl-runtime-0.10.0/src/tune/operation.rs`
+  - `/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cubecl-runtime-0.10.0/src/tune/tune_cache.rs`
+- Mechanism:
+  - `LocalTuner::init` caches the `TunableSet` by initializer `TypeId`, so candidate registration is not rebuilt on each call after the first process-local init.
+  - `LocalTuner::execute` always generates the key from live inputs, locks or creates the per-device `Tuner`, checks the in-memory cache, and executes the cached fastest operation on hit.
+  - On miss, `Tuner::check_tune` marks the key pending, generates cloned benchmark inputs through the `input_gen`, runs profile launches for candidate tunables, picks the lowest score, inserts the in-memory cache entry, and writes persistent cache when `std_io` is enabled.
+  - A single valid tunable uses a fast path: it inserts index `0` without benchmarking.
+  - Persistent cache entries are loaded as checksum-unverified and validated against `TunableSet::compute_checksum`, which only hashes tunable names.
+- 2026-05-16 continuation:
+  - Preflight miss correction: a duplicate audit note was started after context compaction, then removed once this existing note was found. Keep this note as the single LocalTuner mechanism record.
+  - The actual locked versions in this checkout are `burn-cubecl 0.21.0` and `cubecl-runtime 0.10.0`.
+  - `LocalTuner::execute` first checks `tuner.fastest(&key)` directly; on hit, it runs only the cached tunable. On miss or unchecked cache it calls `Tuner::check_tune`.
+  - `Tuner::check_tune` marks the key pending, validates persistent-cache checksums when needed, benchmarks the current highest-priority non-negative `TunePlan` batch, and stops as soon as one batch queues valid profiling samples.
+  - `tune_benchmark` runs inside `client.exclusive`, flushes, performs `3` warmup profiles, then records `10` profiled samples. `process_request` resolves sample durations and sorts candidates by `BenchmarkComputations::score()`.
+  - Candidate parameters are not special-cased by CubeCL. A parameter can be tuned only when the project represents it as a distinct `Tunable` and includes any required runtime, hardware, dtype, shape, alias, and deterministic fields in the `AutotuneKey`.
+- Accuracy guard:
+  - There is no built-in trace-baseline guard in this mechanism.
+  - The `autotune-checks` cfg runs every candidate and compares candidate outputs against each other, but it does not know the project fixture tolerances or deterministic BF16 boundary.
+  - Project kernels that can drift, such as LayerNorm block-size choices, must gate candidates before they enter the tunable set or use an explicit project-level correctness cache/guard.
+- Hot-path implication:
+  - After cache hit, host overhead is still key construction plus spin-lock/cache lookup plus indirect candidate dispatch. This is probably small versus millisecond kernels, but it can matter for many tiny elementwise kernels and should be measured separately before adding broad candidate sets to hot trace paths.
+- Decision:
+  - Keep hardware/shape/dtype fields in project autotune keys, but do not rely on CubeCL autotune alone for accuracy-sensitive BF16 reductions.
+  - For small elementwise kernels, prefer a small candidate set and consider runtime dispatch for known-safe cases if host-side tuning lookup shows up in profiling.

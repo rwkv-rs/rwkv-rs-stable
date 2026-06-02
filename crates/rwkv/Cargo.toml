@@ -22,13 +22,25 @@ store = ["dep:burn-store"]
 config = ["dep:rwkv-config"]
 data = ["dep:rwkv-data"]
 nn = ["dep:rwkv-nn"]
-#train = ["dep:rwkv-train"]
+train = ["dep:rwkv-train"]
 #infer = ["dep:rwkv-infer"]
 #eval = ["dep:rwkv-eval"]
 
-#train-tui = ["train", "rwkv-train/tui"]
-#train-metrics = ["train", "rwkv-train/metrics"]
-#train-collective = ["train", "rwkv-train/collective"]
+train-tui = ["train", "rwkv-train/tui"]
+train-metrics = ["train", "rwkv-train/metrics"]
+train-collective = ["train", "rwkv-train/collective"]
+train-trace = ["train", "rwkv-train/trace"]
+
+wgpu = ["burn/wgpu", "rwkv-nn?/wgpu", "rwkv-train?/wgpu"]
+vulkan = ["wgpu", "burn/vulkan", "rwkv-nn?/vulkan", "rwkv-train?/vulkan"]
+webgpu = ["wgpu", "burn/webgpu", "rwkv-nn?/webgpu", "rwkv-train?/webgpu"]
+metal = ["wgpu", "burn/metal", "rwkv-nn?/metal", "rwkv-train?/metal"]
+cuda = ["burn/cuda", "rwkv-nn?/cuda", "rwkv-train?/cuda"]
+rocm = ["burn/rocm", "rwkv-nn?/rocm", "rwkv-train?/rocm"]
+cpu = ["burn/cpu", "rwkv-nn?/cpu", "rwkv-train?/cpu"]
+fusion = ["burn/fusion", "rwkv-nn?/fusion", "rwkv-train?/fusion"]
+autotune = ["rwkv-nn?/autotune", "rwkv-train?/autotune"]
+autotune-checks = ["autotune", "rwkv-nn?/autotune-checks", "rwkv-train?/autotune-checks"]
 
 #infer-http = ["infer", "rwkv-infer/http"]
 #infer-ipc = ["infer", "rwkv-infer/ipc"]
@@ -42,11 +54,10 @@ burn-store = { workspace = true, default-features = false, optional = true }
 rwkv-config = { path = "../rwkv-config", optional = true }
 rwkv-data = { path = "../rwkv-data", optional = true }
 rwkv-nn = { path = "../rwkv-nn", default-features = false, optional = true }
-#rwkv-train = { path = "../rwkv-train", default-features = false, optional = true }
+rwkv-train = { path = "../rwkv-train", default-features = false, optional = true }
 #rwkv-infer = { path = "../rwkv-infer", default-features = false, optional = true }
 #rwkv-eval = { path = "../rwkv-eval", default-features = false, optional = true }
 #rwkv-test = { path = "../rwkv-test", default-features = false, optional = true }
-#rwkv-bench = { path = "../rwkv-bench", default-features = false, optional = true }
 
 
 [lints]
